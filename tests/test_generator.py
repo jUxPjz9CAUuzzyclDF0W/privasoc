@@ -197,3 +197,28 @@ def test_prompt_example_is_itself_a_valid_parser():
     vrl = re.search(r"```vrl\n(.*?)```", prompts.PARSER_SYSTEM, re.S).group(1)
     err, details, _ = evaluate(Sandbox(VECTOR), vrl, [line])
     assert err is None, details
+
+
+@needs_vector
+def test_config_loads_with_windows_style_paths(tmp_path, monkeypatch):
+    """Regression: a Windows temp path (C:\\Users\\...) interpolated into a double-quoted
+    YAML string broke `parsers reject` ("expected hexadecimal number")."""
+    shutil.copy(Path(__file__).parent.parent / "vector" / "vector.yaml", tmp_path)
+    vectorgen.write([], tmp_path)
+    monkeypatch.setenv("PRIVASOC_INBOX", r"C:\Users\someone\AppData\Local\Temp\x")
+    env = {**os.environ, "PRIVASOC_API_TOKEN": "x", "VECTOR_DATA_DIR": str(tmp_path)}
+    proc = subprocess.run(  # noqa: S603
+        [
+            VECTOR,
+            "validate",
+            "--skip-healthchecks",
+            "--no-environment",
+            "--config-dir",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr

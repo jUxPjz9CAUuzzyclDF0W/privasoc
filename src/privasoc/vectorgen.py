@@ -98,6 +98,7 @@ def validate(vector_bin: str, vector_dir: Path) -> str | None:
     import tempfile
 
     with tempfile.TemporaryDirectory() as d:
+        d = Path(d).as_posix()  # forward slashes: safe inside YAML strings on Windows
         env = {
             **os.environ,
             "PRIVASOC_API_TOKEN": "validate",

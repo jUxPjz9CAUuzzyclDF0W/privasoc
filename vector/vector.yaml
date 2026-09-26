@@ -17,7 +17,7 @@ sources:
     framing: { method: newline_delimited }
   inbox:
     type: file
-    include: ["${PRIVASOC_INBOX:-/inbox}/**/*.log"]
+    include: ['${PRIVASOC_INBOX:-/inbox}/**/*.log']  # single quotes: Windows paths contain backslashes
     read_from: beginning
 
 transforms:
