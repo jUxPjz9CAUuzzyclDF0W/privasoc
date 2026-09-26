@@ -78,3 +78,31 @@ def test_identity_kv_mapping_uses_standard_ecs_hint():
         "destination.ip": "dst",
         "source.port": "s_port",
     }
+
+
+def test_kv_spec_tolerates_lines_without_the_header():
+    """Regression (SonicWall held-out lines): some lines have no syslog header."""
+    import os
+    import shutil
+
+    import pytest
+
+    from privasoc.sandbox import Sandbox
+
+    vector = os.environ.get("PRIVASOC_VECTOR_BIN") or shutil.which("vector")
+    if not vector:
+        pytest.skip("vector binary not available")
+    spec = structured.load(
+        "prefix: '^(?P<ts>[A-Z][a-z]{2} +\\d+ [\\d:]+) (?P<host>\\S+) (?P<rest>.*)$'\n"
+        "body: rest\ntimestamp: {group: ts, format: '%b %d %H:%M:%S'}\n"
+        "fields: {host.hostname: host}\n"
+        "kv: {field_delimiter: ' ', value_delimiter: '=', fields: {destination.ip: dst}}"
+    )
+    lines = [
+        "Jan  3 13:45:50 fw01 id=firewall dst=10.9.9.9 pri=1",
+        "id=firewall sn=X dst=10.8.8.8 pri=5",
+    ]
+    res = Sandbox(vector).run(structured.compile_vrl(spec), lines)
+    assert res.lines[0].output["host"]["hostname"] == "fw01" and "@timestamp" in res.lines[0].output
+    assert res.lines[1].output["destination"]["ip"] == "10.8.8.8"
+    assert structured.check_lines(spec, lines) == []

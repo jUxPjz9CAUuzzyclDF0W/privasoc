@@ -310,3 +310,17 @@ def test_network_transport_numbers_become_names():
     from privasoc.grounding import ungrounded
 
     assert ungrounded(res.lines[0].output, "proto=6 a=1") == []
+
+
+def test_padded_columns_relax_single_spaces():
+    lines = [
+        "1157689320.327   2864 10.1.1.1 TCP_MISS/200 10182 GET http://a.example.com/ u1",
+        "1157689337.481      4 10.1.1.2 TCP_DENIED/407 1661 GET http://b.example.com/ -",
+    ]
+    spec = structured.load(
+        "prefix: '^(?P<ts>\\d+\\.\\d+) (?P<elapsed>\\d+) (?P<client>\\S+) (?P<rest>.*)$'\n"
+        "body: rest\nfields: {source.ip: client}\nshapes: [{regex: '^(?P<x>.*)$'}]",
+        lines,
+    )
+    assert any("runs of spaces" in r for r in spec.repairs)
+    assert structured.check_lines(spec, lines) == []

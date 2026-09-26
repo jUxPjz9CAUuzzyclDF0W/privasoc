@@ -154,6 +154,28 @@ def _scan_groups(pattern: str):
         i += 1
 
 
+def _relax_spaces(pattern: str) -> str:
+    """Literal single spaces (outside character classes) become ` +`."""
+    out, i, in_class = [], 0, False
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\":
+            out.append(pattern[i : i + 2])
+            i += 2
+            continue
+        if in_class:
+            in_class = c != "]"
+        elif c == "[":
+            in_class = True
+        elif c == " " and not pattern.startswith(" +", i) and not pattern.startswith(" *", i):
+            out.append(" +")
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _name_unnamed(pattern: str) -> tuple[str, int]:
     out, last, n = [], 0, 0
     for i, kind in _scan_groups(pattern):
@@ -300,6 +322,21 @@ def autorepair(raw: dict, lines: list[str]) -> list[str]:
         prefix = re.compile(pattern)
     except re.error:
         return repairs
+    # Column-aligned logs pad with several spaces (squid: `1157689320.327   2864 ...`).
+    hit = sum(bool(prefix.search(ln)) for ln in lines) / len(lines)
+    relaxed = _relax_spaces(pattern)
+    if hit < 0.9 and relaxed != pattern:
+        try:
+            rx = re.compile(relaxed)
+            rhit = sum(bool(rx.search(ln)) for ln in lines) / len(lines)
+        except re.error:
+            rhit = 0.0
+        if rhit > hit:
+            pattern, prefix = relaxed, rx
+            raw["prefix"] = relaxed
+            repairs.append(
+                f"prefix: single spaces now match runs of spaces ({hit:.0%} -> {rhit:.0%} of lines)"
+            )
     m0 = prefix.search(lines[0])
     ts = raw.get("timestamp")
     if m0 and isinstance(ts, dict) and isinstance(ts.get("format"), str):
@@ -484,7 +521,7 @@ def matches(spec: Spec, line: str) -> bool:
     if spec.prefix:
         m = spec.prefix.search(line)
         if not m:
-            return False
+            return spec.kv is not None  # with kv the header is optional
         if spec.body:
             target = m.group(spec.body) or ""
     return spec.kv is not None or any(s.regex.search(target) for s in spec.shapes)
@@ -498,7 +535,8 @@ def check_lines(spec: Spec, lines: list[str]) -> list[str]:
         if spec.prefix:
             m = spec.prefix.search(line)
             if not m:
-                problems.append(f"line {i} `{line[:200]}`: prefix does not match")
+                if spec.kv is None:
+                    problems.append(f"line {i} `{line[:200]}`: prefix does not match")
                 continue
             if spec.body:
                 target = m.group(spec.body) or ""
@@ -557,12 +595,30 @@ def _assign(var: str, ecs: str, group: str, expr: str | None = None) -> list[str
 
 def compile_vrl(spec: Spec) -> str:
     out = ["# compiled by privasoc from a structured spec"]
-    if spec.prefix:
+    lenient = spec.kv is not None  # key/value lines: the header is optional (I25)
+    if spec.prefix and lenient:
+        out.append(f"p = parse_regex(.message, {_raw_regex(spec.prefix)}) ?? {{}}")
+        body = f"p.{spec.body}" if spec.body else ".message"
+        target = f"string({body}) ?? string!(.message)"
+    elif spec.prefix:
         out.append(f"p = parse_regex!(.message, {_raw_regex(spec.prefix)})")
         target = f"string!(p.{spec.body})" if spec.body else "string!(.message)"
     else:
         target = "string!(.message)"
-    if spec.timestamp:
+    if spec.timestamp and lenient:
+        g, fmt = spec.timestamp["group"], spec.timestamp["format"]
+        fmt = fmt if ("%Y" in fmt or "%y" in fmt or fmt == "%s") else "%Y " + fmt
+        year = (
+            'format_timestamp!(now(), format: "%Y") + " " + '
+            if fmt.startswith("%Y ") and "%Y" not in spec.timestamp["format"]
+            else ""
+        )
+        if fmt == "%s":
+            conv = f"from_unix_timestamp(to_int(p.{g}) ?? 0) ?? null"
+        else:
+            conv = f'parse_timestamp({year}(string(p.{g}) ?? ""), format: {_lit(fmt)}) ?? null'
+        out.append(f"if p.{g} != null {{ .@timestamp = {conv} }}")
+    elif spec.timestamp:
         g, fmt = spec.timestamp["group"], spec.timestamp["format"]
         if "%Y" not in fmt and "%y" not in fmt and "%s" not in fmt:
             out.append(
