@@ -61,3 +61,20 @@ def test_kv_lines_prefix_and_misplaced_mappings_are_repaired():
         "destination.ip": "dstip",
     }
     assert structured.check_lines(spec, lines) == []
+
+
+def test_identity_kv_mapping_uses_standard_ecs_hint():
+    """Regression (Check Point, qwen3:8b): kv.fields listed `src: src`, `dst: dst`..."""
+    lines = [f'[src:"10.0.0.{i}"; dst:"10.9.9.9"; s_port:"5{i}"; flags:"1"]' for i in range(5)]
+    st = analyze.detect(lines)
+    spec = structured.load(
+        "kv: {field_delimiter: '; ', value_delimiter: ':', "
+        "fields: {src: src, dst: dst, s_port: s_port, flags: flags}}",
+        lines,
+        st,
+    )
+    assert spec.kv["fields"] == {
+        "source.ip": "src",
+        "destination.ip": "dst",
+        "source.port": "s_port",
+    }

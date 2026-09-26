@@ -297,3 +297,16 @@ def test_prompt_kv_example_is_valid():
         Sandbox(VECTOR), structured.compile_vrl(structured.load(spec)), [line]
     )
     assert err is None, details
+
+
+@needs_vector
+def test_network_transport_numbers_become_names():
+    spec = structured.load(
+        "kv: {field_delimiter: ' ', value_delimiter: '=', fields: {network.transport: proto}}"
+    )
+    res = Sandbox(VECTOR).run(structured.compile_vrl(spec), ["proto=6 a=1", "proto=UDP a=2"])
+    assert res.lines[0].output["network"]["transport"] == "tcp"
+    assert res.lines[1].output["network"]["transport"] == "udp"
+    from privasoc.grounding import ungrounded
+
+    assert ungrounded(res.lines[0].output, "proto=6 a=1") == []

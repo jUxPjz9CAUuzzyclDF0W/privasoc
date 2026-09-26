@@ -248,6 +248,19 @@ def _adopt_kv(raw: dict, lines: list[str], structure) -> list[str]:
             del kv_fields[ecs]
             kv_fields[str(name)] = str(ecs)
             repairs.append(f"kv.fields: swapped `{ecs}: {name}` (key and ECS field inverted)")
+    from privasoc.analyze import KEY_HINTS
+
+    for ecs, name in list(kv_fields.items()):
+        # `src: src`: the model picked the key but gave no ECS field. Use the standard
+        # mapping when there is one (reported); otherwise the entry is dropped later.
+        hint = KEY_HINTS.get(str(name).lower())
+        if _ecs_problem(str(ecs)) and hint and hint not in kv_fields:
+            del kv_fields[ecs]
+            kv_fields[hint] = str(name)
+            repairs.append(
+                f"kv.fields: `{ecs}: {name}` is not an ECS mapping; used the "
+                f"standard `{hint}: {name}`"
+            )
     if not kv_fields:
         raw.pop("kv")
     return repairs
@@ -503,6 +516,15 @@ def _assign(var: str, ecs: str, group: str, expr: str | None = None) -> list[str
     lines = [f"{tmp} = if true {{ {src} }} else {{ null }}"]
     if ecs.endswith(INT_SUFFIXES):
         return lines + [f"if {tmp} != null {{ .{ecs} = to_int({tmp}) ?? null }}"]
+    if ecs == "network.transport":
+        # ECS wants lowercase names; many firewalls log IANA numbers (6 = tcp, 17 = udp).
+        n = f"n_{var}_{safe}"
+        return lines + [
+            f'{n} = downcase(string({tmp}) ?? "")',
+            f'{n} = if {n} == "6" {{ "tcp" }} else if {n} == "17" {{ "udp" }} else if {n} == "1" '
+            f'{{ "icmp" }} else if {n} == "58" {{ "ipv6-icmp" }} else {{ {n} }}',
+            f'if {n} != "" && {n} != "-" {{ .{ecs} = {n} }}',
+        ]
     if ecs in IP_FIELDS:
         # Only real IPs reach an IP field (Pi-hole answers "NODATA-IPv6", "<CNAME>"...).
         s = f'(string({tmp}) ?? "")'

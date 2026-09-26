@@ -51,6 +51,49 @@ KV_STYLES = [  # (value delimiter, field delimiter, pair regex)
 ]
 
 
+# Common vendor key names -> ECS. Shown to the model as suggestions it must check, never
+# applied silently: the model (and then the reviewer) keeps the decision.
+KEY_HINTS = {
+    "src": "source.ip",
+    "srcip": "source.ip",
+    "src_ip": "source.ip",
+    "sip": "source.ip",
+    "dst": "destination.ip",
+    "dstip": "destination.ip",
+    "dst_ip": "destination.ip",
+    "dip": "destination.ip",
+    "spt": "source.port",
+    "sport": "source.port",
+    "srcport": "source.port",
+    "s_port": "source.port",
+    "src_port": "source.port",
+    "dpt": "destination.port",
+    "dport": "destination.port",
+    "dstport": "destination.port",
+    "dst_port": "destination.port",
+    "service": "destination.port",
+    "proto": "network.transport",
+    "protocol": "network.transport",
+    "user": "user.name",
+    "usr": "user.name",
+    "suser": "user.name",
+    "username": "user.name",
+    "action": "event.action",
+    "act": "event.action",
+    "hostname": "host.hostname",
+    "devname": "observer.name",
+    "xlatesrc": "source.nat.ip",
+    "xlatedst": "destination.nat.ip",
+    "natsrc": "source.nat.ip",
+    "natdst": "destination.nat.ip",
+    "url": "url.original",
+    "method": "http.request.method",
+    "status": "http.response.status_code",
+    "qname": "dns.question.name",
+    "query": "dns.question.name",
+}
+
+
 @dataclass
 class Structure:
     header: str | None = None
