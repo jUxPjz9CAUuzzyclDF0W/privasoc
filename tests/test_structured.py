@@ -171,6 +171,7 @@ def test_partial_spec_is_proposed_when_it_covers_most_lines(pz):
         max_attempts=2,
     )
     assert out.status == "proposed" and out.reason.startswith("partial")
+    assert out.report()["spec"] == no_forward.strip() or "never-matches" in out.report()["spec"]
     assert 0.8 <= out.metrics["line_coverage"] < 1 and out.metrics["real_lines_ok"]
     out = generate(
         "p",

@@ -237,7 +237,15 @@ def parsers_show(parser_id: str) -> None:
         f"model={p['provider']}:{p['model']}"
     )
     typer.echo(f"# {r.get('reason')}  metrics={r.get('metrics')}")
-    spec = next((a.get("spec") for a in reversed(r.get("attempts", [])) if a.get("spec")), None)
+    # The spec the proposed VRL was compiled from (a partial parser may come from an
+    # earlier attempt than the last one).
+    spec = r.get("spec")
+    if spec is None:  # proposals stored before the spec was recorded
+        import re as _re
+
+        m = _re.search(r"\(attempt (\d+)\)", r.get("reason") or "")
+        n = int(m.group(1)) if m else len(r.get("attempts", []))
+        spec = next((a.get("spec") for a in r.get("attempts", []) if a.get("n") == n), None)
     if spec:
         typer.echo("\n--- spec (written by the model) ---\n" + spec)
     typer.echo("\n--- VRL ---\n" + (p["vrl"] or "(none)"))

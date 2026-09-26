@@ -45,6 +45,7 @@ class Outcome:
     metrics: dict = field(default_factory=dict)
     templates: list[str] = field(default_factory=list)
     preview: list[dict] = field(default_factory=list)  # parser run on REAL lines (local only)
+    spec: str | None = None  # structured mode: the spec the proposed VRL was compiled from
 
     def report(self) -> dict:
         return {
@@ -53,6 +54,7 @@ class Outcome:
             "templates": self.templates,
             "attempts": [a.__dict__ for a in self.attempts],
             "preview": self.preview,
+            "spec": self.spec,
         }
 
 
@@ -270,6 +272,7 @@ def generate(
         )
         if err is None:
             out.status, out.reason, out.vrl = "proposed", "all checks passed", vrl
+            out.spec = out.attempts[-1].spec
             break
         signature = _signature(err, details)
         if signature == previous_class and err in {
@@ -305,7 +308,7 @@ def generate(
     if out.status != "proposed" and best and best["coverage"] >= min_coverage:
         # D44/I16: a parser covering most line shapes is proposed; the lines it does not
         # match keep going to the quarantine, and the reviewer sees the coverage.
-        out.status, out.vrl = "proposed", best["vrl"]
+        out.status, out.vrl, out.spec = "proposed", best["vrl"], best["spec"]
         out.reason = (
             f"partial: covers {best['coverage']:.0%} of the source's lines "
             f"(attempt {best['n']}); the rest stays in quarantine"
