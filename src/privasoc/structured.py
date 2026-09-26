@@ -430,16 +430,29 @@ _UNNAMED = re.compile(r"(?<!\\)\((?!\?)")
 
 def load(text: str, lines: list[str] | None = None, structure=None) -> Spec:
     """Parse and validate a spec; with sample `lines`, apply deterministic repairs first."""
+    yaml_repair = None
     try:
         raw = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        raise SpecError(
-            [f"invalid YAML ({str(exc).splitlines()[0]}); put regexes in single quotes"]
-        ) from exc
+    except yaml.YAMLError:
+        # Common small-model YAML slips: bare `@timestamp` values, tabs.
+        fixed = re.sub(r"([:{,]\s*)(@[\w.]+)", r"\1'\2'", text).replace("\t", "  ")
+        try:
+            raw = yaml.safe_load(fixed)
+            yaml_repair = "yaml: quoted bare `@...` values / replaced tabs"
+        except yaml.YAMLError:
+            raw = None
+    if raw is None and yaml_repair is None:
+        try:
+            yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            raise SpecError(
+                [f"invalid YAML ({str(exc).splitlines()[0]}); put regexes in single quotes"]
+            ) from exc
     if not isinstance(raw, dict):
         raise SpecError(["the spec must be a YAML mapping with `shapes`"])
     problems: list[str] = []
-    repairs: list[str] = adopt_header(raw, lines or [], structure)
+    repairs: list[str] = [yaml_repair] if yaml_repair else []
+    repairs += adopt_header(raw, lines or [], structure)
     repairs += autorepair(raw, lines) if lines else []
     prefix = _regex(raw["prefix"], "prefix", problems) if raw.get("prefix") else None
     pgroups = set(prefix.groupindex) if prefix else set()

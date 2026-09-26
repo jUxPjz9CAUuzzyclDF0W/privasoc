@@ -324,3 +324,12 @@ def test_padded_columns_relax_single_spaces():
     )
     assert any("runs of spaces" in r for r in spec.repairs)
     assert structured.check_lines(spec, lines) == []
+
+
+def test_bare_at_timestamp_value_is_quoted():
+    """Regression (FortiGate, qwen3:8b): `fields: {date: @timestamp}` is invalid YAML."""
+    spec = structured.load(
+        "kv: {field_delimiter: ' ', value_delimiter: '=', fields: {date: @timestamp, "
+        "source.ip: srcip}}"
+    )
+    assert spec.repairs[0].startswith("yaml:") and spec.kv["fields"]["source.ip"] == "srcip"
