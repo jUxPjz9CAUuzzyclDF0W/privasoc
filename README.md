@@ -9,18 +9,46 @@ tests it in Vector's sandbox, and asks a human to approve it. Nothing leaves you
 machine un-pseudonymised: every prompt, local or remote, goes through a
 shape-preserving pseudonymisation layer, and leakage is measured, not assumed.
 
-> Status: **step 2 of 8** (parser generation loop). See the [roadmap](#roadmap) and every design
+> Status: **steps 1-3 of 8 done** (core, parser generation, evaluation) plus source
+> onboarding and host health. See the [roadmap](#roadmap) and every design
 > decision, with its rationale, in [docs/DECISIONS.md](docs/DECISIONS.md).
 
-## Why
+## Why, and what it is not
 
-- **Unknown formats are the daily pain of detection engineering.** Writing parsers is
-  slow; LLMs are good at it but hallucinate. privasoc treats parser generation as a
-  task with a *verifiable reward*: the parser compiles or not, extracted fields are
-  grounded in the raw line or not, ECS fields match held-out ground truth or not.
-- **Security logs are personal data.** Hostnames, users, IPs and paths must not reach
-  a third-party model. Pseudonyms keep the *shape* of what they replace, so a parser
-  written on pseudonymised samples still works on real data.
+privasoc does **not** replace Logstash, Vector or vendor integrations: it runs on Vector and
+uses existing parsers first. On formats someone already wrote a parser for, that parser wins
+(hand-written reference F1 0.87 vs 0.53 for the local model, see below).
+
+The model is the **last resort**, for the long tail no integration covers: in-house
+applications, rare devices, formats changed by a firmware update. There, writing and
+maintaining a parser costs an engineer hours per format; privasoc drafts one in seconds,
+proves it on the real lines, and a human approves it. The quarantine doubles as a drift
+detector: a line no parser recognises is kept and flagged, never silently mis-parsed.
+
+- **Verifiable, not trusted**: every proposal compiles in Vector's sandbox, runs on held-out
+  lines, and every extracted value must be grounded in the raw line (no invented values in
+  90 evaluation runs).
+- **Private by construction**: local model by default; pseudonyms keep the *shape* of what
+  they replace, so a parser written on pseudonymised samples works on real data; leakage is
+  measured, not assumed.
+
+## How a source is onboarded
+
+1. Point the device at privasoc (e.g. Pi-hole: remote syslog to `privasoc:5514`).
+2. privasoc sees a **new sender** and lists it as *pending*; its lines are held, not ingested
+   and not shown to any model, until a human approves the host (`privasoc hosts approve`).
+3. privasoc checks whether the format is **already known**: Vector's built-in parsers
+   (Apache/nginx combined and common log, CEF...) and already-approved parsers.
+4. **Known**: lines go straight to ECS fields through a fixed, tested mapping. No LLM.
+5. **Unknown**: lines stay in quarantine; the local model proposes a parser
+   (`privasoc propose`), a human reviews and approves it (`privasoc parsers approve`).
+6. On approval the parser is deployed to Vector (hot reload) and the **quarantined backlog is
+   re-ingested**, so nothing received before the approval is lost.
+
+Every approved host then has a **health status** (`privasoc hosts list`, `/health/hosts`):
+silence longer than its usual rhythm (a silent firewall is a security signal), volume drops
+or spikes against its own baseline, parse rate (a drop means the format drifted) and clock
+skew, each as `ok` / `warning` / `critical` with the reason.
 
 ## Architecture
 
@@ -51,11 +79,13 @@ uv sync
 uv run privasoc init            # writes .env with fresh secrets
 # edit .env: PRIVASOC_LLM_LOCAL_MODEL=qwen3:8b, PRIVASOC_VECTOR_BIN=/path/to/vector
 
-uv run privasoc import examples/pihole.log --source pihole   # synthetic sample data
+uv run privasoc import examples/pihole.log --source pihole   # synthetic data; a file import
+                                                             # approves its host
 uv run privasoc quarantine                                   # unknown lines per source
 uv run privasoc propose --source pihole                      # the LLM writes a parser
 uv run privasoc parsers show <id>                            # VRL, checks, preview
-uv run privasoc parsers approve <id>                         # human decision
+uv run privasoc parsers approve <id>                         # human decision + backfill
+uv run privasoc hosts list                                   # senders, status, health
 ```
 
 By default the model does not write code: it answers with a small YAML spec (a regex and
@@ -67,7 +97,7 @@ When the local model gives up, stagnates or hallucinates, it stops and suggests
 the remote model only ever sees pseudonymised lines.
 
 Live mode: `docker compose up -d`, then send syslog to UDP/TCP `5514` or drop `*.log`
-files in `data/inbox/`. Approving a parser regenerates `vector/pipeline.yaml`, which Vector
+files in `data/inbox/`; new senders appear in `privasoc hosts list` as pending. Approving a parser regenerates `vector/pipeline.yaml`, which Vector
 hot-reloads.
 
 Example (real output):
@@ -126,7 +156,8 @@ on free text; step 5 adds a local-LLM pass and the evaluation publishes the rate
 
 1. **Core**: Vector → quarantine → SQLite, regex pseudonymisation, CLI. ✅
 2. **Parser generation loop**: sandbox, Drain sampling, anti-hallucination, API fallback. ✅
-3. Parser evaluation on Elastic integration fixtures + HTML report.
+3. **Parser evaluation** on Elastic integration fixtures + HTML report. ✅
+   Source onboarding (pending hosts, known formats first, backfill) and host health. ✅
 4. Web review UI (parsers, learned pseudonymisation).
 5. Local-LLM pseudonymisation that learns (human-approved).
 6. Sigma detection + alerts + structured AI triage.

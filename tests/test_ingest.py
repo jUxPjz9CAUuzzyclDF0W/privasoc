@@ -27,9 +27,10 @@ def test_store_routes_unparsed_to_quarantine(tmp_path):
         [
             Record("pihole", "raw line"),
             Record("pihole", "raw 2", ecs={"event": {"kind": "event"}}, parser_id="p1"),
-        ]
+        ],
+        auto_approve=True,
     )
-    assert c == {"events": 1, "unparsed": 1}
+    assert c == {"events": 1, "unparsed": 1, "held": 0, "dropped": 0}
     assert st.quarantine_stats()[0][:2] == ("pihole", 1)
 
 
@@ -48,7 +49,11 @@ def test_ingest_ndjson_from_vector(client):
         json.dumps({"message": f"line {i}", "privasoc_source": "syslog:10.0.0.1"}) for i in range(3)
     )
     r = c.post("/ingest", content=body, headers={"Authorization": "Bearer t0k"})
-    assert r.status_code == 200 and r.json() == {"events": 0, "unparsed": 3}
+    # D45: a new sender is pending and its lines are held, invisible to the quarantine
+    assert r.status_code == 200 and r.json()["held"] == 3
+    assert store.hosts()[0]["status"] == "pending"
+    assert store.quarantine_sample("syslog:10.0.0.1", 5) == []
+    store.set_host("syslog:10.0.0.1", "approved")
     assert store.quarantine_sample("syslog:10.0.0.1", 5)[0] == "line 2"
 
 

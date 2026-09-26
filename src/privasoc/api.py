@@ -53,6 +53,22 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                 records.append(_to_record(it))
         return store.ingest(records)
 
+    @app.get("/hosts", dependencies=[Depends(auth)])
+    def hosts() -> list[dict]:
+        return store.hosts()
+
+    @app.get("/health/hosts", dependencies=[Depends(auth)])
+    def hosts_health() -> list[dict]:
+        """D47: health of every approved host."""
+        from privasoc import health
+
+        out = []
+        for h in store.hosts("approved"):
+            hs = health.compute(store, h)
+            store.record_health(h["source"], hs["status"], hs["reasons"])
+            out.append(hs)
+        return out
+
     app.state.store = store
     return app
 

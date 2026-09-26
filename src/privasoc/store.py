@@ -38,6 +38,32 @@ CREATE TABLE IF NOT EXISTS parsers (
     vrl        TEXT,
     report     TEXT NOT NULL    -- JSON: metrics, attempts, pseudonymised transcript
 );
+CREATE TABLE IF NOT EXISTS hosts (          -- D45: every sender, approved by a human
+    source      TEXT PRIMARY KEY,
+    status      TEXT NOT NULL,              -- pending | approved | rejected
+    first_seen  TEXT NOT NULL,
+    last_seen   TEXT NOT NULL,
+    lines       INTEGER NOT NULL DEFAULT 0,
+    decided_at  TEXT,
+    format      TEXT,                       -- builtin:<name> | parser:<id> | unknown
+    thresholds  TEXT                        -- JSON overrides for health (D47)
+);
+CREATE TABLE IF NOT EXISTS host_stats (     -- D47: per-minute counters
+    source      TEXT NOT NULL,
+    minute      TEXT NOT NULL,              -- YYYY-MM-DDTHH:MM (UTC)
+    total       INTEGER NOT NULL DEFAULT 0,
+    parsed      INTEGER NOT NULL DEFAULT 0,
+    skew_sum    REAL NOT NULL DEFAULT 0,    -- seconds, |received - @timestamp|
+    skew_n      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (source, minute)
+);
+CREATE TABLE IF NOT EXISTS health_history (
+    id          INTEGER PRIMARY KEY,
+    source      TEXT NOT NULL,
+    at          TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    reasons     TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS llm_calls (
     id          INTEGER PRIMARY KEY,
     at          TEXT NOT NULL,
@@ -71,47 +97,196 @@ class Store:
         self.conn = sqlite3.connect(str(path), check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        # migration for databases created before D45: lines of unapproved hosts are held
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(unparsed)")}
+        if "held" not in cols:
+            self.conn.execute("ALTER TABLE unparsed ADD COLUMN held INTEGER NOT NULL DEFAULT 0")
+            self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
 
-    def ingest(self, records: Iterable[Record]) -> dict[str, int]:
-        """Route each record: parsed -> events, otherwise -> quarantine."""
-        counts = {"events": 0, "unparsed": 0}
+    def ingest(self, records: Iterable[Record], auto_approve: bool = False) -> dict[str, int]:
+        """Route each record (D45): unknown sender -> pending host, lines held; rejected host
+        -> dropped; approved host -> events if parsed, otherwise quarantine.
+        `auto_approve` is for explicit admin imports (a file given on the command line)."""
+        counts = {"events": 0, "unparsed": 0, "held": 0, "dropped": 0}
+        status_cache: dict[str, str] = {}
         with self.conn:
             for r in records:
                 ts = r.received_at or utcnow()
-                if r.ecs is not None and r.parser_id:
+                status = status_cache.get(r.source) or self._touch_host(r.source, ts, auto_approve)
+                status_cache[r.source] = status
+                self.conn.execute(
+                    "UPDATE hosts SET last_seen=MAX(last_seen, ?), lines=lines+1 WHERE source=?",
+                    (ts, r.source),
+                )
+                if status == "rejected":
+                    counts["dropped"] += 1
+                    continue
+                parsed = status == "approved" and r.ecs is not None and bool(r.parser_id)
+                self._count(r.source, ts, parsed, r.ecs if parsed else None)
+                if parsed:
                     self.conn.execute(
                         "INSERT INTO events(source, received_at, parser_id, ecs) VALUES (?,?,?,?)",
                         (r.source, ts, r.parser_id, json.dumps(r.ecs, separators=(",", ":"))),
                     )
                     counts["events"] += 1
                 else:
+                    held = int(status != "approved")
                     self.conn.execute(
-                        "INSERT INTO unparsed(source, received_at, raw) VALUES (?,?,?)",
-                        (r.source, ts, r.raw),
+                        "INSERT INTO unparsed(source, received_at, raw, held) VALUES (?,?,?,?)",
+                        (r.source, ts, r.raw, held),
                     )
-                    counts["unparsed"] += 1
+                    counts["held" if held else "unparsed"] += 1
         return counts
+
+    # ------------------------------------------------------------------ hosts (D45)
+
+    def _touch_host(self, source: str, ts: str, auto_approve: bool) -> str:
+        row = self.conn.execute("SELECT status FROM hosts WHERE source=?", (source,)).fetchone()
+        if row:
+            return row[0]
+        status = "approved" if auto_approve else "pending"
+        self.conn.execute(
+            "INSERT INTO hosts(source, status, first_seen, last_seen, decided_at) "
+            "VALUES (?,?,?,?,?)",
+            (source, status, ts, ts, ts if auto_approve else None),
+        )
+        return status
+
+    def hosts(self, status: str | None = None) -> list[dict]:
+        q, args = "SELECT * FROM hosts", ()
+        if status:
+            q, args = q + " WHERE status=?", (status,)
+        cols = (
+            "source",
+            "status",
+            "first_seen",
+            "last_seen",
+            "lines",
+            "decided_at",
+            "format",
+            "thresholds",
+        )
+        out = []
+        for row in self.conn.execute(q + " ORDER BY first_seen", args):
+            d = dict(zip(cols, row, strict=True))
+            d["thresholds"] = json.loads(d["thresholds"]) if d["thresholds"] else {}
+            out.append(d)
+        return out
+
+    def host(self, source: str) -> dict | None:
+        return next((h for h in self.hosts() if h["source"] == source), None)
+
+    def set_host(
+        self,
+        source: str,
+        status: str | None = None,
+        fmt: str | None = None,
+        thresholds: dict | None = None,
+    ) -> None:
+        with self.conn:
+            if status:
+                self.conn.execute(
+                    "UPDATE hosts SET status=?, decided_at=? WHERE source=?",
+                    (status, utcnow(), source),
+                )
+                if status == "approved":  # held lines become normal quarantine
+                    self.conn.execute("UPDATE unparsed SET held=0 WHERE source=?", (source,))
+                elif status == "rejected":
+                    self.conn.execute("DELETE FROM unparsed WHERE source=? AND held=1", (source,))
+            if fmt is not None:
+                self.conn.execute("UPDATE hosts SET format=? WHERE source=?", (fmt, source))
+            if thresholds is not None:
+                self.conn.execute(
+                    "UPDATE hosts SET thresholds=? WHERE source=?", (json.dumps(thresholds), source)
+                )
+
+    def quarantine_rows(self, source: str, limit: int = 5000) -> list[tuple[int, str, str]]:
+        """(id, received_at, raw) of the quarantined (not held) lines of a source, oldest first."""
+        return self.conn.execute(
+            "SELECT id, received_at, raw FROM unparsed WHERE source=? AND held=0 ORDER BY id "
+            "LIMIT ?",
+            (source, limit),
+        ).fetchall()
+
+    def backfill(self, source: str, parser_id: str, rows: list[tuple[int, str, dict]]) -> int:
+        """Move quarantined lines that the new parser handles into events (D45 step 6)."""
+        with self.conn:
+            for rid, received_at, ecs in rows:
+                self.conn.execute(
+                    "INSERT INTO events(source, received_at, parser_id, ecs) VALUES (?,?,?,?)",
+                    (source, received_at, parser_id, json.dumps(ecs, separators=(",", ":"))),
+                )
+                self.conn.execute("DELETE FROM unparsed WHERE id=?", (rid,))
+                # the line was counted as unparsed on arrival: it is parsed now (D47 stats)
+                skew = _skew_seconds(received_at, ecs)
+                self.conn.execute(
+                    "UPDATE host_stats SET parsed=parsed+1, skew_sum=skew_sum+?, "
+                    "skew_n=skew_n+? WHERE source=? AND minute=?",
+                    (skew or 0.0, int(skew is not None), source, received_at[:16]),
+                )
+        return len(rows)
+
+    # ------------------------------------------------------------------ health (D47)
+
+    def _count(self, source: str, ts: str, parsed: bool, ecs: dict | None) -> None:
+        skew = _skew_seconds(ts, ecs)
+        self.conn.execute(
+            "INSERT INTO host_stats(source, minute, total, parsed, skew_sum, skew_n) "
+            "VALUES (?,?,1,?,?,?) ON CONFLICT(source, minute) DO UPDATE SET "
+            "total=total+1, parsed=parsed+excluded.parsed, skew_sum=skew_sum+excluded.skew_sum, "
+            "skew_n=skew_n+excluded.skew_n",
+            (source, ts[:16], int(parsed), skew or 0.0, int(skew is not None)),
+        )
+
+    def stats(self, source: str, since_minute: str) -> list[tuple]:
+        return self.conn.execute(
+            "SELECT minute, total, parsed, skew_sum, skew_n FROM host_stats "
+            "WHERE source=? AND minute>=? ORDER BY minute",
+            (source, since_minute),
+        ).fetchall()
+
+    def record_health(self, source: str, status: str, reasons: list[str]) -> None:
+        last = self.conn.execute(
+            "SELECT status, reasons FROM health_history WHERE source=? ORDER BY id DESC LIMIT 1",
+            (source,),
+        ).fetchone()
+        if last and last[0] == status and json.loads(last[1]) == reasons:
+            return  # history keeps changes only
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO health_history(source, at, status, reasons) VALUES (?,?,?,?)",
+                (source, utcnow(), status, json.dumps(reasons)),
+            )
+
+    def health_history(self, source: str, limit: int = 50) -> list[tuple[str, str, list]]:
+        rows = self.conn.execute(
+            "SELECT at, status, reasons FROM health_history WHERE source=? ORDER BY id DESC "
+            "LIMIT ?",
+            (source, limit),
+        ).fetchall()
+        return [(a, st, json.loads(r)) for a, st, r in rows]
 
     def quarantine_stats(self) -> list[tuple[str, int, str, str]]:
         """(source, lines, first_seen, last_seen) per source."""
         return self.conn.execute(
             "SELECT source, COUNT(*), MIN(received_at), MAX(received_at) "
-            "FROM unparsed GROUP BY source ORDER BY COUNT(*) DESC"
+            "FROM unparsed WHERE held=0 GROUP BY source ORDER BY COUNT(*) DESC"
         ).fetchall()
 
     def quarantine_sample(self, source: str, limit: int = 10) -> list[str]:
         rows = self.conn.execute(
-            "SELECT raw FROM unparsed WHERE source = ? ORDER BY id DESC LIMIT ?",
+            "SELECT raw FROM unparsed WHERE source = ? AND held=0 ORDER BY id DESC LIMIT ?",
             (source, limit),
         ).fetchall()
         return [r[0] for r in rows]
 
     def quarantine_lines(self, source: str, limit: int = 500) -> list[str]:
         rows = self.conn.execute(
-            "SELECT raw FROM unparsed WHERE source = ? ORDER BY id DESC LIMIT ?", (source, limit)
+            "SELECT raw FROM unparsed WHERE source = ? AND held=0 ORDER BY id DESC LIMIT ?",
+            (source, limit),
         ).fetchall()
         return [r[0] for r in rows]
 
@@ -167,3 +342,24 @@ def _parser_row(row) -> dict:
     d = dict(zip(keys, row, strict=True))
     d["report"] = json.loads(d["report"])
     return d
+
+
+def parse_ts(ts: str) -> datetime:
+    """ISO timestamps as produced by Vector (nanoseconds, Z) or by privasoc (+00:00)."""
+    import re
+
+    m = re.match(r"(.*?\d\d:\d\d:\d\d)(\.\d+)?(.*)$", ts.strip().replace("Z", "+00:00"))
+    if not m:
+        raise ValueError(ts)
+    base, frac, tz = m.groups()
+    dt = datetime.fromisoformat(base + (frac or "")[:7] + tz)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def _skew_seconds(received_at: str, ecs: dict | None) -> float | None:
+    if not ecs or not isinstance(ecs.get("@timestamp"), str):
+        return None
+    try:
+        return abs((parse_ts(received_at) - parse_ts(ecs["@timestamp"])).total_seconds())
+    except ValueError:
+        return None

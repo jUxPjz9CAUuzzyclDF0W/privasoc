@@ -80,12 +80,121 @@ def import_file(
     source: Annotated[str, typer.Option(help="Source name, e.g. pihole or checkpoint")],
 ) -> None:
     """Import a log file line by line (offline alternative to Vector)."""
-    store = Store(get_settings().db_path)
+    s = get_settings()
+    store = Store(s.db_path)
+    new_host = store.host(source) is None
     with path.open(encoding="utf-8", errors="replace") as fh:
         counts = store.ingest(
-            Record(source=source, raw=ln.rstrip("\r\n")) for ln in fh if ln.strip()
+            (Record(source=source, raw=ln.rstrip("\r\n")) for ln in fh if ln.strip()),
+            auto_approve=True,  # importing a file is itself the admin's explicit decision
         )
     typer.echo(f"{counts['events']} events, {counts['unparsed']} quarantined")
+    if new_host:
+        _approve_flow(store, s, source)
+
+
+def _approve_flow(store: Store, s: Settings, source: str) -> None:
+    from privasoc import onboarding
+    from privasoc.sandbox import Sandbox
+
+    r = onboarding.approve_host(store, s, Sandbox(s.vector_bin), source)
+    if r["format"] == "unknown":
+        typer.echo(
+            f"{source}: format not known by Vector; {r.get('quarantined', 0)} lines in "
+            f"quarantine. Next: privasoc propose --source {source}"
+        )
+    else:
+        typer.echo(
+            f"{source}: known format {r['format']} (coverage {r['coverage']:.0%}); "
+            f"{r['backfilled']} lines ingested, {r['still_quarantined']} left in quarantine"
+        )
+
+
+hosts_app = typer.Typer(help="Senders: approval (D45) and health (D47).", no_args_is_help=True)
+app.add_typer(hosts_app, name="hosts")
+
+
+@hosts_app.command("list")
+def hosts_list(status: str | None = None) -> None:
+    """Every sender with its status, format and health."""
+    from privasoc import health
+
+    store = Store(get_settings().db_path)
+    rows = store.hosts(status)
+    if not rows:
+        typer.echo("No host yet: point a device at privasoc (syslog 5514) or import a file.")
+    for h in rows:
+        line = f"{h['source']:28} {h['status']:9} {h['format'] or '-':24} lines={h['lines']}"
+        if h["status"] == "approved":
+            hs = health.compute(store, h)
+            store.record_health(h["source"], hs["status"], hs["reasons"])
+            line += f"  health={hs['status']}" + (
+                f" ({'; '.join(hs['reasons'])})" if hs["reasons"] else ""
+            )
+        typer.echo(line)
+
+
+@hosts_app.command("approve")
+def hosts_approve(source: str) -> None:
+    """Approve a pending sender: known formats are ingested, others go to quarantine."""
+    s = get_settings()
+    store = Store(s.db_path)
+    if not store.host(source):
+        raise typer.BadParameter(f"unknown host {source!r}")
+    _approve_flow(store, s, source)
+
+
+@hosts_app.command("reject")
+def hosts_reject(source: str) -> None:
+    """Reject a sender: its held lines are deleted and future lines dropped."""
+    store = Store(get_settings().db_path)
+    if not store.host(source):
+        raise typer.BadParameter(f"unknown host {source!r}")
+    store.set_host(source, "rejected")
+    typer.echo(f"{source} rejected")
+
+
+@hosts_app.command("health")
+def hosts_health(source: str) -> None:
+    """Current health of a host, its metrics and the history of status changes."""
+    import json
+
+    from privasoc import health
+
+    store = Store(get_settings().db_path)
+    h = store.host(source)
+    if not h:
+        raise typer.BadParameter(f"unknown host {source!r}")
+    hs = health.compute(store, h)
+    store.record_health(source, hs["status"], hs["reasons"])
+    typer.echo(json.dumps(hs, indent=2))
+    for at, st, reasons in store.health_history(source, 10):
+        typer.echo(f"  {at}  {st:8} {'; '.join(reasons)}")
+
+
+@hosts_app.command("thresholds")
+def hosts_thresholds(
+    source: str,
+    values: Annotated[
+        list[str],
+        typer.Argument(help="key=value pairs, e.g. silence_min_minutes=30 parse_warning=0.8"),
+    ],
+) -> None:
+    """Override health thresholds for one host."""
+    from privasoc.health import DEFAULTS
+
+    store = Store(get_settings().db_path)
+    h = store.host(source)
+    if not h:
+        raise typer.BadParameter(f"unknown host {source!r}")
+    th = dict(h["thresholds"])
+    for kv in values:
+        k, _, v = kv.partition("=")
+        if k not in DEFAULTS:
+            raise typer.BadParameter(f"unknown threshold {k!r}; known: {sorted(DEFAULTS)}")
+        th[k] = float(v)
+    store.set_host(source, thresholds=th)
+    typer.echo(f"{source}: {th}")
 
 
 @app.command()
@@ -191,6 +300,11 @@ def propose(
     if mode not in {"structured", "vrl"}:
         raise typer.BadParameter("mode must be structured or vrl")
     store = Store(s.db_path)
+    host = store.host(source)
+    if host and host["status"] != "approved":
+        raise typer.BadParameter(
+            f"{source!r} is {host['status']}: approve the host first (privasoc hosts approve)"
+        )
     lines = store.quarantine_lines(source)
     if not lines:
         raise typer.BadParameter(f"no quarantined lines for {source!r}")
@@ -281,6 +395,15 @@ def _set_status(parser_id: str, status: str) -> None:
         typer.echo(error, err=True)
         raise typer.Exit(code=1)
     typer.echo(f"{parser_id} {status}; regenerated and validated {path}")
+    if status == "approved":  # D45 step 6: ingest the lines that waited in quarantine
+        from privasoc import onboarding
+        from privasoc.sandbox import Sandbox
+
+        r = onboarding.after_parser_approval(store, Sandbox(s.vector_bin), store.parser(parser_id))
+        typer.echo(
+            f"backfill: {r['backfilled']} quarantined lines ingested, "
+            f"{r['still_quarantined']} still in quarantine"
+        )
 
 
 @parsers_app.command("approve")
