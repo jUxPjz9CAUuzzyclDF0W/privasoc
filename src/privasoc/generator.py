@@ -102,8 +102,8 @@ def _compile_spec(spec_text: str, sample: list[str]) -> tuple[str | None, str | 
         return None, "spec", exc.problems
     unmatched = structured.check_lines(spec, sample)
     if unmatched:
-        return None, "spec", unmatched
-    return structured.compile_vrl(spec), None, []
+        return None, "spec", unmatched + spec.repairs
+    return structured.compile_vrl(spec), None, spec.repairs
 
 
 def _signature(err: str | None, details: list[str]) -> tuple:
@@ -218,8 +218,11 @@ def generate(
             if mode == "structured":
                 spec_text = vrl
                 vrl, err, details = _compile_spec(spec_text, sample)
+            repairs = details if mode == "structured" and err is None else []
             if mode != "structured" or err is None:
                 err, details, metrics = evaluate(sandbox, vrl, sample)
+                details = details + repairs  # repairs are reported, never silent
+                metrics["auto_repairs"] = len(repairs)
                 out.metrics = metrics
         out.attempts.append(Attempt(n, status, err, details, reply.latency_s, vrl))
         if mode == "structured" and answer is not None:

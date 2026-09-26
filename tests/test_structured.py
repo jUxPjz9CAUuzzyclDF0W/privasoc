@@ -120,5 +120,25 @@ shapes:
     assert "(?P<ts>...)" in text
     assert "move it to `constants`" in text
     assert "`domain` is not an ECS field" in text
-    assert "`event.category` cannot be ['dns']" in text
-    assert "`event.outcome` cannot be ['stale']" in text
+    # categorisation values are repaired rather than rejected (see next tests)
+
+
+def test_invalid_categorisation_values_are_repaired_and_reported():
+    spec = structured.load(
+        "prefix: '^(?P<ts>\\S+) (?P<rest>.*)$'\nbody: rest\n"
+        "constants: {event.type: [dns, info], event.outcome: blocked}\n"
+        "shapes: [{regex: '^q'}]"
+    )
+    assert spec.constants == {"event.type": ["info"]}
+    assert len(spec.repairs) == 2 and "removed invalid `event.outcome`" in spec.repairs[1]
+
+
+def test_prefix_that_captures_too_much_gets_a_hint():
+    spec = structured.load(
+        "prefix: '^(?P<ts>\\S+ \\S+) (?P<type>\\w+)(?P<extra> .*)?$'\nbody: extra\n"
+        "shapes: [{regex: '^reply (?P<name>\\S+) is (?P<ip>\\S+)'}]"
+    )
+    problems = structured.check_lines(
+        spec, ["2026-09-26 14:43:33.885 reply a.example.com is 1.2.3.4"]
+    )
+    assert "prefix captures too much" in problems[0]

@@ -21,7 +21,7 @@ Spec:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import yaml
 
@@ -57,6 +57,7 @@ class Spec:
     constants: dict
     fields: dict[str, str]
     shapes: list[Shape]
+    repairs: list[str] = field(default_factory=list)
 
 
 def _regex(src, where: str, problems: list[str]) -> re.Pattern | None:
@@ -109,24 +110,36 @@ def _mapping(obj, where: str, groups: set[str], problems: list[str]) -> dict[str
     return out
 
 
-def _constants(obj, where: str, problems: list[str]) -> dict:
+def _constants(obj, where: str, problems: list[str], repairs: list[str]) -> dict:
+    """Categorisation values outside the ECS enumerations are dropped, not fatal: small
+    models keep repeating them, the fix is mechanical, and removing a value can never
+    introduce a hallucination. Every repair is reported to the model and the reviewer."""
     from privasoc.ecs import ALLOWED
 
     if not isinstance(obj, dict):
         problems.append(f"{where}: must be a mapping `ecs.field: value`")
         return {}
+    out = {}
     for ecs, value in obj.items():
-        bad = _ecs_problem(str(ecs))
+        key = str(ecs)
+        bad = _ecs_problem(key)
         if bad:
             problems.append(f"{where}: {bad}")
-        elif str(ecs) in ALLOWED:
+            continue
+        if key in ALLOWED:
             values = value if isinstance(value, list) else [value]
-            wrong = [v for v in values if v not in ALLOWED[str(ecs)]]
+            kept = [v for v in values if v in ALLOWED[key]]
+            wrong = [v for v in values if v not in ALLOWED[key]]
             if wrong:
-                problems.append(
-                    f"{where}: `{ecs}` cannot be {wrong}; allowed: {sorted(ALLOWED[str(ecs)])}"
+                repairs.append(
+                    f"{where}: removed invalid `{key}` value(s) {wrong} "
+                    f"(allowed: {sorted(ALLOWED[key])})"
                 )
-    return obj
+            if not kept:
+                continue
+            value = kept if isinstance(value, list) else kept[0]
+        out[key] = value
+    return out
 
 
 _UNNAMED = re.compile(r"(?<!\\)\((?!\?)")
@@ -142,6 +155,7 @@ def load(text: str) -> Spec:
     if not isinstance(raw, dict):
         raise SpecError(["the spec must be a YAML mapping with `shapes`"])
     problems: list[str] = []
+    repairs: list[str] = []
     prefix = _regex(raw["prefix"], "prefix", problems) if raw.get("prefix") else None
     pgroups = set(prefix.groupindex) if prefix else set()
     body = raw.get("body")
@@ -165,7 +179,7 @@ def load(text: str) -> Spec:
             )
             ts = None
     fields = _mapping(raw.get("fields"), "fields", pgroups, problems)
-    constants = _constants(raw.get("constants") or {}, "constants", problems)
+    constants = _constants(raw.get("constants") or {}, "constants", problems, repairs)
     shapes = []
     raw_shapes = raw.get("shapes") or []
     if not isinstance(raw_shapes, list) or not raw_shapes:
@@ -179,7 +193,7 @@ def load(text: str) -> Spec:
         rx = _regex(sh.get("regex"), f"{where}.regex", problems)
         if rx is None:
             continue
-        sconst = _constants(sh.get("constants") or {}, f"{where}.constants", problems)
+        sconst = _constants(sh.get("constants") or {}, f"{where}.constants", problems, repairs)
         shapes.append(
             Shape(
                 str(sh.get("name", f"shape{i}")),
@@ -193,7 +207,7 @@ def load(text: str) -> Spec:
             problems.append(f"group name `{g}` must be an identifier")
     if problems:
         raise SpecError(problems)
-    return Spec(prefix, str(body) if body else None, ts, constants, fields, shapes)
+    return Spec(prefix, str(body) if body else None, ts, constants, fields, shapes, repairs)
 
 
 def check_lines(spec: Spec, lines: list[str]) -> list[str]:
@@ -209,7 +223,17 @@ def check_lines(spec: Spec, lines: list[str]) -> list[str]:
             if spec.body:
                 target = m.group(spec.body) or ""
         if not any(s.regex.search(target) for s in spec.shapes):
-            problems.append(f"line {i} `{line[:200]}`: no shape matches `{target[:160]}`")
+            msg = f"line {i} `{line[:200]}`: no shape matches `{target[:160]}`"
+            if spec.prefix and spec.prefix.groups:
+                # Would a shape match if the prefix kept only its first group (the date)?
+                after_first = line[m.end(1) :].lstrip() if m.end(1) >= 0 else line
+                if any(s.regex.search(after_first) for s in spec.shapes):
+                    msg += (
+                        " - your prefix captures too much: keep only the timestamp in the "
+                        "prefix and put the rest of the line in the body group, e.g. "
+                        "'^(?P<ts>...) (?P<rest>.*)$' with body: rest"
+                    )
+            problems.append(msg)
     return problems
 
 
