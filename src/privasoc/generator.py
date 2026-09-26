@@ -292,6 +292,8 @@ def generate(
             out.status, out.reason = "failed", f"LLM server error: {str(exc)[:200]}"
             break
         total_latency += reply.latency_s
+        if getattr(reply, "prompt_truncated", False):
+            say(f"attempt {n}: warning: prompt filled the model's context window")
         answer, problem = _parse_answer(reply.text)
         if reply.finish_reason == "length":
             problem = "your answer was cut off (too long): write a shorter program, no prose"

@@ -63,6 +63,10 @@ def test_missing_vector_binary_fails_fast():
 
 class FakeModels(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
+        if self.path.startswith("/api/"):  # not an Ollama server
+            self.send_response(404)
+            self.end_headers()
+            return
         data = json.dumps({"data": [{"id": "qwen3:8b"}]}).encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(data)))
@@ -100,3 +104,47 @@ def test_local_no_think_sends_reasoning_effort_none_but_remote_does_not():
     )
     srv.shutdown()
     assert "reasoning_effort" not in FakeOpenAI.seen[-1][2]
+
+
+class FakeOllama(BaseHTTPRequestHandler):
+    seen: list = []
+
+    def _send(self, obj):
+        data = json.dumps(obj).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):  # noqa: N802
+        self._send({"data": [{"id": "qwen3:8b"}]} if self.path == "/v1/models" else {"models": []})
+
+    def do_POST(self):  # noqa: N802
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        FakeOllama.seen.append((self.path, body))
+        self._send(
+            {
+                "message": {"content": "STATUS: ok"},
+                "done_reason": "stop",
+                "prompt_eval_count": 8192,
+                "eval_count": 3,
+            }
+        )
+
+    def log_message(self, *args):
+        pass
+
+
+def test_ollama_native_api_sets_context_window_and_detects_truncation():
+    """Regression: through /v1, Ollama used a 4096-token window and silently dropped the
+    start of long prompts (system prompt included)."""
+    srv = HTTPServer(("127.0.0.1", 0), FakeOllama)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    ep = Endpoint("local", f"http://127.0.0.1:{srv.server_port}/v1", "qwen3:8b", think=False)
+    client = LLMClient(ep, num_ctx=8192)
+    client.check()
+    reply = client.chat([{"role": "user", "content": "x"}], originals=set())
+    srv.shutdown()
+    path, body = FakeOllama.seen[-1]
+    assert path == "/api/chat" and body["options"]["num_ctx"] == 8192 and body["think"] is False
+    assert reply.text == "STATUS: ok" and reply.prompt_truncated

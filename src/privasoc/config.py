@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     llm_local_think: bool = False
     llm_timeout: float = 300.0  # seconds per LLM call
     llm_max_tokens: int = 2048
+    llm_num_ctx: int = 8192  # Ollama context window (8B Q4 + 8k context fits in 8 GB VRAM)
     llm_remote_url: str = ""
     llm_remote_model: str = ""
     llm_remote_api_key: SecretStr = SecretStr("")

@@ -43,6 +43,10 @@ def test_propose_end_to_end_with_openai_compatible_server(tmp_path, monkeypatch)
             self.wfile.write(data)
 
         def do_GET(self):  # noqa: N802
+            if self.path.startswith("/api/"):
+                self.send_response(404)
+                self.end_headers()
+                return
             self._send({"data": [{"id": "fake:1b"}]})
 
         def do_POST(self):  # noqa: N802

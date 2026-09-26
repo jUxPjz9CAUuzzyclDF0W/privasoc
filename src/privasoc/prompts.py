@@ -178,7 +178,10 @@ def parser_user(
     if structure:
         parts += ["", structure]
     parts += ["", "Sample lines:"]
-    parts += [f"{i + 1}. {s}" for i, s in enumerate(samples)]
+    # Long lines are cut: the whole prompt must fit a small local model's context window.
+    parts += [
+        f"{i + 1}. {s if len(s) <= 400 else s[:400] + ' [...]'}" for i, s in enumerate(samples)
+    ]
     parts += ["", "Write the YAML spec." if mode == "structured" else "Write the VRL program."]
     return "\n".join(parts)
 

@@ -154,6 +154,7 @@ def _run_generation(
         call_log=store.log_llm_call,
         timeout=s.llm_timeout,
         max_tokens=s.llm_max_tokens,
+        num_ctx=s.llm_num_ctx,
     )
     sandbox = Sandbox(s.vector_bin)
     try:  # fail fast, before minutes of LLM time
@@ -377,7 +378,11 @@ def eval_run(
         else:
             ep = _endpoint(s, provider)
             llm = LLMClient(
-                ep, call_log=store.log_llm_call, timeout=s.llm_timeout, max_tokens=s.llm_max_tokens
+                ep,
+                call_log=store.log_llm_call,
+                timeout=s.llm_timeout,
+                max_tokens=s.llm_max_tokens,
+                num_ctx=s.llm_num_ctx,
             )
             llm.check()
         for p in pseudo.split(","):
