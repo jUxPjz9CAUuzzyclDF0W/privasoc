@@ -4,7 +4,7 @@ data/*
 !data/.gitkeep
 *.db
 *.db-*
-vault*
+# (the vault itself is data/vault.db, covered above; do not ignore vault.py)
 # French working copy of the decision log
 docs/*.fr.md
 # python
