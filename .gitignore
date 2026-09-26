@@ -1,0 +1,17 @@
+# secrets and personal data: never committed (D37, D41)
+.env
+data/*
+!data/.gitkeep
+*.db
+*.db-*
+vault*
+# French working copy of the decision log
+docs/*.fr.md
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/

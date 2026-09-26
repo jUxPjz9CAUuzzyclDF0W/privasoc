@@ -1,0 +1,96 @@
+# privasoc: decision log
+
+Living log of every design decision. Only what is written here is decided.
+IDs are stable; superseded decisions are struck through and point to their replacement.
+Framing sessions: 2026-09-26 (7 rounds). Previous Codex prototype (`soc-workbench`) is reference only and not reused.
+
+## Goal
+
+| ID | Decision |
+|----|----------|
+| D0 | Public GitHub portfolio project supporting an application for *Research Engineer, Cybersecurity RL* (Anthropic). Selection criteria: maximise AI-engineering learning, stay simple, stay reproducible by a reviewer. |
+| D0b | **Privacy first.** A local LLM is the default. A remote API can be configured, but critical fields are always pseudonymised before any call. |
+
+## Framing
+
+| ID | Topic | Decision |
+|----|-------|----------|
+| D1 | Context | Homelab first, personal data only. Architecture must not prevent a later production (SOC/MSSP) use. |
+| D2 | Input | Raw logs (syslog, files, Windows events, firewall...) that we parse and normalise ourselves. We do not start from pre-built alerts. |
+| D3 | AI roles | ~~Initial priorities~~ revised by D19: 1. parser generation, 2. alert triage, 3. Sigma rule writing, 4. natural-language hunting. |
+| D4 | Build vs assemble | Hybrid: the normalisation pipeline is ours (learning goal); storage and search reuse existing components. |
+| D5 | Definition of done | 3 sources normalised, a detection fires, the AI produces a readable triage, end to end and demonstrable, plus a reproducible evaluation report. |
+| D6 | Repository | New clean repository (`privasoc`). The old prototype stays untouched as reference. |
+
+## Technical choices
+
+| ID | Topic | Decision | Rationale |
+|----|-------|----------|-----------|
+| D7 | Data | Two tracks: **public labelled data** for evaluation and reproducibility; **live homelab data** for the demo, never committed. | Reviewers cannot replay personal logs; public data gives ground truth. |
+| D8 | Schema | Elastic Common Schema (ECS). | Sigma mappings exist; LLMs know it well. |
+| D9 | Normalisation | Vector + VRL, each parser covered by tests. AI-generated parsers are VRL too. | VRL is sandboxed: a generated parser cannot execute arbitrary code. Vector also handles collection. |
+| D10 | Storage and detection | SQLite + Sigma rules compiled to SQL with `pySigma-backend-sqlite`. No OpenSearch. | No heavy infrastructure; SQL also serves NL hunting. |
+| D11 | Runtime | Docker Compose, runnable on a laptop with sample data. Live: a Proxmox VM. LLM runs on the GPU workstation, reached over the LAN. | Reproducibility. |
+| D12 | LLM providers | One OpenAI-compatible interface: local server by default, any remote API optional. Pseudonymisation is enforced in code for every provider. | Privacy (D0b). |
+| D13 | Language | Python (uv, pydantic, FastAPI, Typer, pySigma). | Security and ML ecosystem. |
+
+## Positioning
+
+| ID | Topic | Decision |
+|----|-------|----------|
+| D14 | Showcase | Working AI SOC tool **plus an evaluation harness** (quality local vs API, latency, pseudonymisation leakage). No gym-style RL environment for now. |
+| D15 | Pseudonymisation | Fields: IPs, hostnames, users, domains, emails, SIDs, user paths, free text (command lines, messages). Deterministic keyed-HMAC typed tokens; IPs mapped while preserving subnet and private/public class; local mapping table to re-identify LLM answers. Applied **always**, local LLM included. An automated test searches every outgoing prompt for original values. |
+| D16 | Language | Repository in English, including this log. |
+| D17 | Deadline | ~~1 week~~ superseded by D32. |
+| D18 | Sources | Check Point and Pi-hole available at home. Guiding idea: when a log format is unknown, the AI helps parse and ingest it. |
+
+## The core feature
+
+| ID | Topic | Decision |
+|----|-------|----------|
+| D19 | Hero | **AI parser generation for unknown formats**: samples → pseudonymisation → LLM writes VRL emitting ECS → sandboxed run (`vector vrl`) → validation (ECS schema + fixtures) → error feedback → at most N attempts → human approval. Metrics: compile rate, per-field ECS F1, attempts, latency; local vs API; with vs without pseudonymisation. |
+| D20 | Ground truth | Elastic integrations pipeline-test fixtures (raw lines + expected ECS), ~10 formats including Check Point. Downloaded at evaluation time, not redistributed. Few-shot on some lines, scored on held-out lines. |
+| D21 | Check Point | Homelab device (no employer/customer data): usable live. |
+| D22 | Scope | Originally cut for one week; superseded by D32 (full scope). |
+| D23 | Human in the loop | A generated parser is activated only after explicit approval (diff + test results). |
+| D24 | Interface | CLI (Typer) + web UI + static HTML evaluation report. |
+| D25 | Sensitive-value detection | Typed regex detectors (IPv4/v6, email, MAC, FQDN, SID, user paths, URL) + key=value heuristics + **local LLM pass** for residual entities. Improves over time (D33). Tokens are **shape-preserving** (an IP stays a valid IP, an email an email). Residual leakage is measured and published. |
+| D26 | Unknown format | Lines not matched by any approved parser go to a per-source **quarantine** (SQLite `unparsed`), clustered by template (Drain, D35). |
+| D27 | LLM output | A VRL program only. K = 10 sample lines, N = 5 attempts, compiler error or field diff fed back on failure. |
+| D28 | Models | **One small local model** with task-specific prompts. **API fallback** to any provider, always behind pseudonymisation. |
+| D29 | Web UI | Parser review page (samples, VRL, tests, ECS output, approve/reject) **plus alerts and triage view**. |
+| D30 | Sources | Source-agnostic: generic inputs (syslog, files). No device-specific assumption. |
+| D31 | Name | `privasoc`. |
+
+## Final arbitrations
+
+| ID | Topic | Decision |
+|----|-------|----------|
+| D32 | Time | Time is not a constraint: ship fast **with every feature**, incrementally. |
+| D33 | Learning pseudonymisation | Learn generalisable patterns (key names, regexes) plus a **local-only, git-ignored** value list. Each learned item is **human-approved** with a preview of its effect on the latest logs. |
+| D34 | API fallback | Human action by default; automatic when configured (after N local failures) **or when the local model admits its limit or hallucinates** (D38). Every API call is logged (provider, size, number of pseudonymised tokens). |
+| D35 | Drain | Drain groups log lines into templates (variable parts become `<*>`). Used for **stratified sampling** and a template-coverage metric. One parser per source. Library: `drain3`. |
+| D36 | Local model | Reached through a **configurable URL** (OpenAI-compatible). Any server, any model. Default chosen by a mini-benchmark recorded here. |
+| D37 | Licence and publishing | **MIT**. Public from the start; `gitleaks` in pre-commit and CI; `data/` and the vault git-ignored. |
+| D38 | Hallucination / limits | (a) Self-report: JSON `status: ok \| cannot_parse \| unsure` + reason; (b) **grounding check**: every extracted value must appear in the raw line or derive from a known deterministic transform (timestamp, case, integer); (c) stagnation: same error class twice in a row. Ungrounded-value rate is an evaluation metric. |
+| D39 | Build order | 1. Core (Vector → quarantine → SQLite, regex pseudonymisation, CLI). 2. Generation loop + sandbox + Drain + anti-hallucination + API fallback. 3. Parser evaluation + HTML report. 4. Review UI. 5. Local-LLM pseudonymisation + learning. 6. Sigma + alerts + triage + UI. 7. AI Sigma rules, then NL hunting. 8. Triage evaluation, then Windows and Proxmox collection. |
+| D40 | Triage and rules | Structured JSON: verdict (`true_positive \| false_positive \| needs_investigation`), confidence, summary, ATT&CK techniques, investigation steps, suggested SQL. Re-identified only at display time. SigmaHQ rules auto-enabled when their `logsource` matches present data. |
+| D41 | Access and secrets | UI on the LAN behind a single access token. Mapping vault in a separate file (mode 600), **encrypted at rest**; HMAC and encryption keys in `.env`. |
+| D42 | Parser library | Approved parsers are indexed; the 2-3 nearest (Drain template similarity) are injected as examples. "Learning curve" evaluation: F1 and attempts versus library size. |
+| D43 | Anonymity | The project is anonymous: no real name, personal handle or real homelab address anywhere (code, tests, docs, licence, git identity). Test data uses placeholders (`jdoe`, `laptop-01`, 192.168.1.0/24). Licence holder: "privasoc contributors". Commits use the GitHub no-reply identity. |
+
+## Implementation notes
+Decisions taken while building, same format.
+
+| ID | Topic | Decision |
+|----|-------|----------|
+| I1 | Collector | Vector 0.55.0. `socket` sources (UDP/TCP 5514) with `codec: bytes` and a `file` inbox: raw lines are never pre-parsed. Source identity = `syslog:<sender>` or `file:<name>`. Delivery to the API through the `http` sink (NDJSON, bearer token, retries). |
+| I2 | Pseudonym formats | user `user-xxxxxx`, keyed host `host-xxxxxx`; FQDN label-wise and suffix-consistent, TLD kept; email `uxxxxxx@<fqdn token>`; IPv4 private → 10/8, public → 198.18.0.0/15, /24 kept consistent; IPv6 → 2001:db8::/32, /64 kept consistent; MAC → locally administered `02:...`; SID domain part hashed, RID kept. Collisions resolved by a salt counter in the vault. |
+| I3 | Propagation | A value detected once in a line is replaced everywhere in that line (catches free-text mentions of a keyed user). |
+| I4 | Leak check | Word-boundary, case-insensitive search of every original in the outgoing text. The CLI refuses to print a line that still leaks. |
+| I5 | Vault | SQLite, lookup by HMAC digest, originals encrypted with Fernet, file mode 600. |
+
+## Dropped (from the Codex prototype)
+- "Firewall/EDR alerts only, no raw logs": replaced by D2.
+- Hand-written SIEM in Node.js + PostgreSQL: replaced by D4/D10.
+- Sizing for 400 customers / 1M alerts per day: out of scope (D1).
