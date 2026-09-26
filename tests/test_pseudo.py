@@ -107,3 +107,11 @@ def test_vault_is_encrypted_at_rest(tmp_path, pz, vault):
 def test_leak_detector_flags_residual_values(pz):
     assert pz.leaks("contact bob now", {"bob"}) == ["bob"]
     assert pz.leaks("bobby is fine", {"bob"}) == []
+
+
+def test_private_tlds_are_detected_but_paths_and_namespaces_are_not():
+    # regression: a homelab TLD leaked a hostname into an LLM prompt
+    k = kinds("2026-09-26 14:46:00 query[A] media.jdoe.lab from 192.168.1.9")
+    assert ("fqdn", "media.jdoe.lab") in k
+    assert detect("/etc/pihole/hosts/custom.list read") == []
+    assert detect("System.Management.Automation loaded") == []

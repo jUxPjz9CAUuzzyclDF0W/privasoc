@@ -89,6 +89,15 @@ def _parse_answer(text: str) -> tuple[dict | None, str]:
     return None, "answer must contain STATUS, REASON and a ```vrl code block"
 
 
+def _signature(err: str | None, details: list[str]) -> tuple:
+    """D38c stagnation = the *same* failure twice in a row: same class and same error codes
+    (compile) or same offending fields. A different error is progress, not stagnation."""
+    text = " ".join(details)
+    codes = tuple(sorted(set(re.findall(r"\bE\d{3}\b", text))))
+    fields = tuple(sorted(set(re.findall(r"`([\w@.]+)`", text))))
+    return (err, codes or fields or (re.sub(r"\d+", "#", details[0][:80]) if details else ""))
+
+
 def evaluate(sandbox: Sandbox, vrl: str, lines: list[str]) -> tuple[str | None, list[str], dict]:
     """Return (error_class, details, metrics) for a program on lines."""
     res = sandbox.run(vrl, lines)
@@ -192,17 +201,18 @@ def generate(
         if err is None:
             out.status, out.reason, out.vrl = "proposed", "all checks passed", vrl
             break
-        if err == previous_class and err in {"ungrounded", "runtime", "compile", "schema"}:
+        signature = _signature(err, details)
+        if signature == previous_class and err in {"ungrounded", "runtime", "compile", "schema"}:
             # D38c: stagnation (same failure class repeatedly)
             out.status, out.reason = "needs_escalation", f"stagnation on {err} errors"
             out.vrl = vrl
             break
-        previous_class = err
+        previous_class = signature
         # Keep only the latest attempt in context: small local models have small windows.
         messages = [
             *base,
             {"role": "assistant", "content": reply.text},
-            {"role": "user", "content": prompts.parser_feedback(err, details)},
+            {"role": "user", "content": prompts.parser_feedback(err, details, vrl)},
         ]
     else:
         out.status, out.reason = (

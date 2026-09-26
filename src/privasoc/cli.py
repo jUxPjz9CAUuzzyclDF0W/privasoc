@@ -200,8 +200,6 @@ def propose(
     store.save_parser(
         out.parser_id, source, out.status, out.provider, out.model, out.vrl, out.report()
     )
-    for a in out.attempts:
-        typer.echo(f"  attempt {a.n}: {a.error_class or 'ok'} ({a.latency_s:.1f}s)")
     typer.echo(f"{out.parser_id}: {out.status} ({out.reason})  {out.metrics}")
     if out.status == "proposed":
         typer.echo(f"Review with: privasoc parsers show {out.parser_id}")

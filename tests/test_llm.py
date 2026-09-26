@@ -85,3 +85,18 @@ def test_preflight_check_validates_server_and_model():
     srv.shutdown()
     with pytest.raises(RuntimeError, match="unreachable"):
         LLMClient(Endpoint("local", url, "qwen3:8b")).check()
+
+
+def test_local_no_think_sends_reasoning_effort_none_but_remote_does_not():
+    srv = HTTPServer(("127.0.0.1", 0), FakeOpenAI)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_port}/v1"
+    LLMClient(Endpoint("local", url, "m", think=False)).chat(
+        [{"role": "user", "content": "x"}], originals=set()
+    )
+    assert FakeOpenAI.seen[-1][2]["reasoning_effort"] == "none"
+    LLMClient(Endpoint("remote", url, "m", think=False)).chat(
+        [{"role": "user", "content": "x"}], originals=set()
+    )
+    srv.shutdown()
+    assert "reasoning_effort" not in FakeOpenAI.seen[-1][2]

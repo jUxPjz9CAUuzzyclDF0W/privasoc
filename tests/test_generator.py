@@ -165,3 +165,35 @@ def test_truncated_answer_gets_specific_feedback(pz, lines):
     out = generate("s", lines, llm, pz, Sandbox("unused"), k=5, max_attempts=2)
     assert out.attempts[0].error_class == "format"
     assert "cut off" in llm.sent[-1]
+
+
+def test_feedback_gives_hint_and_numbered_program():
+    from privasoc import prompts
+
+    fb = prompts.parser_feedback(
+        "compile",
+        ["error[E701]: call to undefined variable"],
+        "parse_regex!(.message, r'x')\nif exists(p.ts) {}",
+    )
+    assert "Assign first" in fb and "  2 | if exists(p.ts) {}" in fb
+
+
+def test_different_compile_errors_are_progress_not_stagnation():
+    from privasoc.generator import _signature
+
+    assert _signature("compile", ["error[E701]: x"]) != _signature("compile", ["error[E103]: y"])
+    assert _signature("compile", ["error[E701]: p"]) == _signature("compile", ["error[E701]: q"])
+
+
+@needs_vector
+def test_prompt_example_is_itself_a_valid_parser():
+    """The worked example in the system prompt must pass our own checks."""
+    import re
+
+    from privasoc import prompts
+    from privasoc.generator import evaluate
+
+    line = re.search(r"^line: (.*)$", prompts.PARSER_SYSTEM, re.M).group(1)
+    vrl = re.search(r"```vrl\n(.*?)```", prompts.PARSER_SYSTEM, re.S).group(1)
+    err, details, _ = evaluate(Sandbox(VECTOR), vrl, [line])
+    assert err is None, details

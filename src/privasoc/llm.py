@@ -100,6 +100,8 @@ class LLMClient:
         }
         if json_mode:
             body["response_format"] = {"type": "json_object"}
+        if not self.endpoint.think and not self.endpoint.remote:
+            body["reasoning_effort"] = "none"  # Ollama: disables thinking (the only way on /v1)
         headers = (
             {"Authorization": f"Bearer {self.endpoint.api_key}"} if self.endpoint.api_key else {}
         )
@@ -110,6 +112,14 @@ class LLMClient:
             headers=headers,
             timeout=self.timeout,
         )
+        if resp.status_code == 400 and "reasoning_effort" in body:
+            body.pop("reasoning_effort")  # a server that does not know the field
+            resp = httpx.post(
+                f"{self.endpoint.url.rstrip('/')}/chat/completions",
+                json=body,
+                headers=headers,
+                timeout=self.timeout,
+            )
         latency = time.monotonic() - t0
         resp.raise_for_status()
         data = resp.json()

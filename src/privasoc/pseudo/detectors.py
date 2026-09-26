@@ -35,6 +35,15 @@ PRIORITY = {
 
 # Last labels that look like TLDs but are file extensions or code namespaces.
 NOT_TLDS = {
+    "list",
+    "lock",
+    "pid",
+    "sock",
+    "bak",
+    "old",
+    "service",
+    "socket",
+    "timer",
     "exe",
     "dll",
     "sys",
@@ -137,7 +146,7 @@ _MAC = re.compile(
 _IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 _IPV6 = re.compile(r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:])")
 _FQDN = re.compile(
-    r"(?<![\w@.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,24}(?![\w-])"
+    r"(?<![\w@.\-/\\])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,24}(?![\w-])"
 )
 _WIN_PATH_USER = re.compile(r"(?i)\b[A-Z]:\\{1,2}Users\\{1,2}([^\\\s\"',;]+)")
 _NIX_PATH_USER = re.compile(r"(?<![\w.])/(?:home|Users)/([^/\s\"',;]+)")
@@ -173,11 +182,14 @@ _KV_SKIP = {
 }
 
 
-def _tld_ok(tld: str) -> bool:
-    t = tld.lower()
+def _tld_ok(name: str) -> bool:
+    """Known TLDs are always accepted. Any other alphabetic TLD is accepted when the whole
+    name is lowercase: private TLDs (.lan, .home, .lab...) are common in homelabs, while
+    code namespaces (System.Management.Automation) are capitalised."""
+    t = name.rsplit(".", 1)[1].lower()
     if t in NOT_TLDS:
         return False
-    return len(t) == 2 or t in LONG_TLDS
+    return len(t) == 2 or t in LONG_TLDS or name == name.lower()
 
 
 def _ipv4_sensitive(value: str) -> bool:
@@ -225,7 +237,7 @@ def detect(text: str) -> list[Entity]:
         if _ipv6_sensitive(m.group(0)):
             add("ipv6", m)
     for m in _FQDN.finditer(text):
-        if _tld_ok(m.group(0).rsplit(".", 1)[1]):
+        if _tld_ok(m.group(0)):
             add("fqdn", m)
     for rx in (_WIN_PATH_USER, _NIX_PATH_USER):
         for m in rx.finditer(text):
