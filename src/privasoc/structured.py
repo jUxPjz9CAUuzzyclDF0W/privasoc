@@ -275,6 +275,8 @@ def _constants(obj, where: str, problems: list[str], repairs: list[str]) -> dict
             if not kept:
                 continue
             value = kept if isinstance(value, list) else kept[0]
+            if key in {"event.kind", "event.outcome"} and isinstance(value, list):
+                value = value[0]  # single-valued in ECS (category/type are arrays)
         out[key] = value
     return out
 

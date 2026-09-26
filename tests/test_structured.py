@@ -184,3 +184,15 @@ def test_partial_spec_is_proposed_when_it_covers_most_lines(pz):
         min_coverage=0.95,
     )
     assert out.status == "needs_escalation"
+
+
+def test_single_valued_categorisation_fields_are_unwrapped():
+    spec = structured.load(
+        "constants: {event.kind: [event], event.outcome: [success], event.category: [network]}\n"
+        "shapes: [{regex: 'x'}]"
+    )
+    assert spec.constants == {
+        "event.kind": "event",
+        "event.outcome": "success",
+        "event.category": ["network"],
+    }
