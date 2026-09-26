@@ -70,8 +70,81 @@ Use cannot_parse or unsure honestly when the format is beyond you.
 """
 
 
+STRUCTURED_SYSTEM = r"""You are a detection engineer. You describe how to parse log lines into Elastic
+Common Schema (ECS) with regular expressions. You do NOT write code: a compiler turns your
+YAML spec into a parser, then it is tested on the sample lines.
+
+Spec format (YAML; ALWAYS put regexes in single quotes):
+prefix: '<regex with named groups (?P<name>...) matching the start common to all lines>'
+body: <name of the prefix group holding the rest of the line>
+timestamp: {group: <prefix group>, format: '<strftime format>'}
+constants: {<ecs.field>: <value>}          # same for every line
+fields: {<ecs.field>: <prefix group>}      # prefix groups -> ECS
+shapes:                                    # one entry per line shape, tried in order
+  - name: <short name>
+    regex: '<regex with named groups, matched against body>'
+    fields: {<ecs.field>: <group of this regex>}
+    constants: {<ecs.field>: <value>}
+
+Rules
+- Every sample line must match the prefix and at least one shape. Look at the templates:
+  one shape per template family. A last catch-all shape like '^(?P<text>.*)$' is allowed.
+- Regexes are Rust regex: no lookahead/lookbehind, no backreferences.
+- Only map values that appear in the line. Constants are only for categorisation fields
+  (event.kind, event.category, event.type, event.outcome, event.action) and observer.*.
+- IPs, hostnames (d1a2b3c.lan), users (user-1a2b3c) are pseudonymised placeholders:
+  treat them as real values of their type.
+- Timestamp formats: '%Y-%m-%d %H:%M:%S%.3f' (with milliseconds), '%b %d %H:%M:%S'
+  (syslog, the year is added for you), '%s' (epoch seconds).
+- Ports, pids and codes are converted to integers for you.
+
+Useful ECS fields: @timestamp, event.kind, event.category (list), event.type (list),
+event.outcome, event.action, source.ip, source.port, destination.ip, destination.port,
+network.transport, user.name, host.hostname, process.name, process.pid, dns.question.name,
+dns.question.type, dns.resolved_ip, observer.product, log.level, rule.name, url.original
+
+Complete example (another format, for the structure only):
+lines:
+Sep 26 10:01:02 srv sshd[812]: Failed password for user-1a2b3c from 10.1.2.3 port 5122 ssh2
+Sep 26 10:01:09 srv sshd[812]: Disconnected from 10.1.2.3 port 5122
+STATUS: ok
+REASON: sshd lines, two shapes
+```yaml
+prefix: '^(?P<ts>\w{3} +\d+ [\d:]+) (?P<host>\S+) (?P<proc>\w+)\[(?P<pid>\d+)\]: (?P<msg>.*)$'
+body: msg
+timestamp: {group: ts, format: '%b %d %H:%M:%S'}
+constants: {event.kind: event}
+fields: {host.hostname: host, process.name: proc, process.pid: pid}
+shapes:
+  - name: auth
+    regex: '^(?P<result>Failed|Accepted) password for (?P<user>\S+) from (?P<ip>\S+) port (?P<port>\d+)'
+    fields: {event.action: result, user.name: user, source.ip: ip, source.port: port}
+    constants: {event.category: [authentication]}
+  - name: disconnect
+    regex: '^Disconnected from (?P<ip>\S+) port (?P<port>\d+)'
+    fields: {source.ip: ip, source.port: port}
+    constants: {event.category: [session], event.type: [end]}
+```
+
+Answer in exactly this format, nothing else:
+STATUS: ok | cannot_parse | unsure
+REASON: <one sentence>
+```yaml
+<spec>
+```
+"""
+
+
+def system_for(mode: str) -> str:
+    return STRUCTURED_SYSTEM if mode == "structured" else PARSER_SYSTEM
+
+
 def parser_user(
-    source: str, samples: list[str], templates: list[str], examples: list[dict] | None = None
+    source: str,
+    samples: list[str],
+    templates: list[str],
+    examples: list[dict] | None = None,
+    mode: str = "vrl",
 ) -> str:
     parts = [f"Source: {source}", "", "Line templates found (Drain, <*> = variable):"]
     parts += [f"- {t}" for t in templates[:15]]
@@ -81,7 +154,7 @@ def parser_user(
             parts += [f"# sample: {ex['sample']}", ex["vrl"], ""]
     parts += ["", "Sample lines:"]
     parts += [f"{i + 1}. {s}" for i, s in enumerate(samples)]
-    parts += ["", "Write the VRL program."]
+    parts += ["", "Write the YAML spec." if mode == "structured" else "Write the VRL program."]
     return "\n".join(parts)
 
 
@@ -105,6 +178,7 @@ def parser_feedback(error_class: str, details: list[str], program: str | None = 
         "schema": "The output is not valid ECS.",
         "ungrounded": "Some extracted values do not appear in the line (hallucinated).",
         "format": "Your answer did not follow the required format.",
+        "spec": "Your spec does not work yet.",
     }[error_class]
     body = "\n".join(f"- {d}" for d in details[:12])
     import re
@@ -117,5 +191,5 @@ def parser_feedback(error_class: str, details: list[str], program: str | None = 
     if program and error_class in {"compile", "runtime"}:
         numbered = "\n".join(f"{i:3} | {ln}" for i, ln in enumerate(program.splitlines(), 1))
         parts.append("Your program, with line numbers:\n" + numbered)
-    parts.append("Fix it and answer in the same STATUS / REASON / ```vrl format.")
+    parts.append("Fix it and answer in the same STATUS / REASON / fenced code block format.")
     return "\n\n".join(parts)

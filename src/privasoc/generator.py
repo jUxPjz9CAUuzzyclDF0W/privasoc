@@ -29,6 +29,7 @@ class Attempt:
     details: list[str]
     latency_s: float
     vrl: str | None = None
+    spec: str | None = None  # structured mode: the model's YAML, compiled into `vrl`
 
 
 @dataclass
@@ -57,7 +58,9 @@ class Outcome:
 
 _STATUS = re.compile(r"^\s*STATUS\s*:\s*(\w+)", re.I | re.M)
 _REASON = re.compile(r"^\s*REASON\s*:\s*(.+)$", re.I | re.M)
-_FENCE = re.compile(r"```[ \t]*(?:vrl|coffee|ruby|rust|text)?[ \t]*\n(.*?)```", re.S | re.I)
+_FENCE = re.compile(
+    r"```[ \t]*(?:vrl|yaml|yml|coffee|ruby|rust|text)?[ \t]*\n(.*?)```", re.S | re.I
+)
 
 
 def _parse_answer(text: str) -> tuple[dict | None, str]:
@@ -72,7 +75,7 @@ def _parse_answer(text: str) -> tuple[dict | None, str]:
         st = status.group(1).lower() if status else "ok"
         reason = _REASON.search(text)
         if st == "ok" and not fence:
-            return None, "STATUS is ok but there is no ```vrl code block"
+            return None, "STATUS is ok but there is no fenced code block"
         return {
             "status": st,
             "reason": reason.group(1).strip() if reason else "",
@@ -87,6 +90,20 @@ def _parse_answer(text: str) -> tuple[dict | None, str]:
         except json.JSONDecodeError as exc:
             return None, f"invalid JSON ({exc.msg}); use the STATUS / REASON / ```vrl format"
     return None, "answer must contain STATUS, REASON and a ```vrl code block"
+
+
+def _compile_spec(spec_text: str, sample: list[str]) -> tuple[str | None, str | None, list[str]]:
+    """Structured mode: validate the model's spec in Python, then compile it to VRL."""
+    from privasoc import structured
+
+    try:
+        spec = structured.load(spec_text)
+    except structured.SpecError as exc:
+        return None, "spec", exc.problems
+    unmatched = structured.check_lines(spec, sample)
+    if unmatched:
+        return None, "spec", unmatched
+    return structured.compile_vrl(spec), None, []
 
 
 def _signature(err: str | None, details: list[str]) -> tuple:
@@ -144,6 +161,7 @@ def generate(
     max_attempts: int = 5,
     examples: list[dict] | None = None,
     progress=None,
+    mode: str = "structured",
 ) -> Outcome:
     idx, clusters = stratified_sample(raw_lines, k)
     raw_sample = [raw_lines[i] for i in idx]
@@ -159,8 +177,8 @@ def generate(
         uuid.uuid4().hex[:8], source, "failed", "", ep.name, ep.model, None, templates=templates
     )
     messages = [
-        {"role": "system", "content": prompts.PARSER_SYSTEM},
-        {"role": "user", "content": prompts.parser_user(source, sample, templates, examples)},
+        {"role": "system", "content": prompts.system_for(mode)},
+        {"role": "user", "content": prompts.parser_user(source, sample, templates, examples, mode)},
     ]
     previous_class = None
     total_latency = 0.0
@@ -196,9 +214,16 @@ def generate(
                 )
                 out.status, out.reason = "needs_escalation", f"model reported {status}"
                 break
-            err, details, metrics = evaluate(sandbox, vrl, sample)
-            out.metrics = metrics
+            spec_text = None
+            if mode == "structured":
+                spec_text = vrl
+                vrl, err, details = _compile_spec(spec_text, sample)
+            if mode != "structured" or err is None:
+                err, details, metrics = evaluate(sandbox, vrl, sample)
+                out.metrics = metrics
         out.attempts.append(Attempt(n, status, err, details, reply.latency_s, vrl))
+        if mode == "structured" and answer is not None:
+            out.attempts[-1].spec = spec_text
         say(
             f"attempt {n}: {err or 'ok'} after {reply.latency_s:.0f}s"
             + (f" ({details[0][:120]})" if details else "")
@@ -207,7 +232,13 @@ def generate(
             out.status, out.reason, out.vrl = "proposed", "all checks passed", vrl
             break
         signature = _signature(err, details)
-        if signature == previous_class and err in {"ungrounded", "runtime", "compile", "schema"}:
+        if signature == previous_class and err in {
+            "ungrounded",
+            "runtime",
+            "compile",
+            "schema",
+            "spec",
+        }:
             # D38c: stagnation (same failure class repeatedly)
             out.status, out.reason = "needs_escalation", f"stagnation on {err} errors"
             out.vrl = vrl
@@ -217,7 +248,12 @@ def generate(
         messages = [
             *base,
             {"role": "assistant", "content": reply.text},
-            {"role": "user", "content": prompts.parser_feedback(err, details, vrl)},
+            {
+                "role": "user",
+                "content": prompts.parser_feedback(
+                    err, details, None if mode == "structured" else vrl
+                ),
+            },
         ]
     else:
         out.status, out.reason = (

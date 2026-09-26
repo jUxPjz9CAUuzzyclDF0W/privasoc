@@ -129,6 +129,12 @@ class Sandbox:
                 )
         result = SandboxResult()
         for rc, out, err in runs:
+            if "aborted" in {
+                _clean(out).splitlines()[-1:][0] if _clean(out) else "",
+                _clean(err).splitlines()[-1:][0] if _clean(err) else "",
+            }:
+                result.lines.append(LineResult(error="aborted: the line matched no known shape"))
+                continue
             out = _clean(out)
             if rc != 0:
                 result.lines.append(LineResult(error=_clean(err) or f"exit {rc}"))

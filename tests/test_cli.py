@@ -64,6 +64,7 @@ def test_propose_end_to_end_with_openai_compatible_server(tmp_path, monkeypatch)
         "PRIVASOC_VECTOR_DIR": str(tmp_path),
         "PRIVASOC_LLM_LOCAL_URL": f"http://127.0.0.1:{srv.server_port}/v1",
         "PRIVASOC_LLM_LOCAL_MODEL": "fake:1b",
+        "PRIVASOC_PARSER_MODE": "vrl",
     }
     for k, v in env.items():
         monkeypatch.setenv(k, v)

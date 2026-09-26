@@ -142,7 +142,9 @@ def _endpoint(s: Settings, provider: str):
     return Endpoint("local", s.llm_local_url, s.llm_local_model, think=s.llm_local_think)
 
 
-def _run_generation(source: str, provider: str, store: Store, s: Settings, lines: list[str]):
+def _run_generation(
+    source: str, provider: str, store: Store, s: Settings, lines: list[str], mode: str
+):
     from privasoc.generator import generate
     from privasoc.llm import LLMClient
     from privasoc.sandbox import Sandbox
@@ -169,6 +171,7 @@ def _run_generation(source: str, provider: str, store: Store, s: Settings, lines
         k=s.sample_size,
         max_attempts=s.max_attempts,
         progress=lambda msg: typer.echo(f"  {msg}"),
+        mode=mode,
     )
 
 
@@ -176,22 +179,28 @@ def _run_generation(source: str, provider: str, store: Store, s: Settings, lines
 def propose(
     source: Annotated[str, typer.Option(help="Quarantined source to learn")],
     provider: Annotated[str, typer.Option(help="local (default) or remote")] = "local",
+    mode: Annotated[
+        str | None, typer.Option(help="structured (regex + ECS mapping) or vrl (free-form)")
+    ] = None,
 ) -> None:
     """Ask the LLM to write a parser for a quarantined source."""
     s = get_settings()
+    mode = mode or s.parser_mode
+    if mode not in {"structured", "vrl"}:
+        raise typer.BadParameter("mode must be structured or vrl")
     store = Store(s.db_path)
     lines = store.quarantine_lines(source)
     if not lines:
         raise typer.BadParameter(f"no quarantined lines for {source!r}")
     typer.echo(f"{len(lines)} lines, asking {provider} model...")
-    out = _run_generation(source, provider, store, s, lines)
+    out = _run_generation(source, provider, store, s, lines, mode)
     if out.status == "needs_escalation" and provider == "local":
         if s.auto_fallback and s.llm_remote_url:
             typer.echo(f"local model: {out.reason}; falling back to remote API (pseudonymised)")
             store.save_parser(
                 out.parser_id, source, "failed", out.provider, out.model, out.vrl, out.report()
             )
-            out = _run_generation(source, "remote", store, s, lines)
+            out = _run_generation(source, "remote", store, s, lines, mode)
         else:
             typer.echo(
                 f"local model: {out.reason}. Retry with --provider remote if you accept "
@@ -227,6 +236,9 @@ def parsers_show(parser_id: str) -> None:
         f"model={p['provider']}:{p['model']}"
     )
     typer.echo(f"# {r.get('reason')}  metrics={r.get('metrics')}")
+    spec = next((a.get("spec") for a in reversed(r.get("attempts", [])) if a.get("spec")), None)
+    if spec:
+        typer.echo("\n--- spec (written by the model) ---\n" + spec)
     typer.echo("\n--- VRL ---\n" + (p["vrl"] or "(none)"))
     typer.echo("\n--- preview on latest real lines ---")
     for item in r.get("preview", []):

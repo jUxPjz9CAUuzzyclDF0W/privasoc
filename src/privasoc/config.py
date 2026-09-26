@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     vector_bin: str = "vector"
     vector_dir: Path = Path("./vector")
     sample_size: int = 10  # D27: K
+    parser_mode: str = "structured"  # D44: structured (regex + mapping) or vrl
     max_attempts: int = 5  # D27: N
 
     @property

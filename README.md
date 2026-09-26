@@ -58,7 +58,10 @@ uv run privasoc parsers show <id>                            # VRL, checks, prev
 uv run privasoc parsers approve <id>                         # human decision
 ```
 
-`propose` prints each attempt (`compile`, `runtime`, `schema`, `ungrounded` or `ok`).
+By default the model does not write code: it answers with a small YAML spec (a regex and
+an ECS mapping per line shape), which privasoc validates and compiles to VRL itself. Small
+local models are far more reliable this way; `--mode vrl` asks for free-form VRL instead.
+`propose` prints each attempt (`spec`, `compile`, `runtime`, `schema`, `ungrounded` or `ok`).
 When the local model gives up, stagnates or hallucinates, it stops and suggests
 `--provider remote`; set `PRIVASOC_AUTO_FALLBACK=true` to escalate automatically. Either way
 the remote model only ever sees pseudonymised lines.

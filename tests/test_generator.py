@@ -65,7 +65,7 @@ def lines():
 @needs_vector
 def test_loop_recovers_from_compile_error_and_hallucination(pz, lines):
     llm = ScriptedLLM([ok(BROKEN), ok(HALLUCINATING), ok(GOOD)])
-    out = generate("file:pihole.log", lines, llm, pz, Sandbox(VECTOR), k=10)
+    out = generate("file:pihole.log", lines, llm, pz, Sandbox(VECTOR), k=10, mode="vrl")
     assert [a.error_class for a in out.attempts] == ["compile", "ungrounded", None]
     assert out.status == "proposed" and out.vrl == GOOD
     assert out.metrics["real_lines_ok"] is True  # written on pseudonyms, works on real data
@@ -78,13 +78,13 @@ def test_loop_recovers_from_compile_error_and_hallucination(pz, lines):
 @needs_vector
 def test_stagnation_escalates(pz, lines):
     llm = ScriptedLLM([ok(HALLUCINATING), ok(HALLUCINATING)])
-    out = generate("s", lines, llm, pz, Sandbox(VECTOR), k=10)
+    out = generate("s", lines, llm, pz, Sandbox(VECTOR), k=10, mode="vrl")
     assert out.status == "needs_escalation" and "stagnation" in out.reason
 
 
 def test_model_admitting_limit_escalates(pz, lines):
     llm = ScriptedLLM([ok("", status="cannot_parse")])
-    out = generate("s", lines, llm, pz, Sandbox("unused"), k=5)
+    out = generate("s", lines, llm, pz, Sandbox("unused"), k=5, mode="vrl")
     assert out.status == "needs_escalation" and len(out.attempts) == 1
 
 
@@ -131,7 +131,7 @@ def test_timeout_escalates_cleanly(pz, lines):
 
     llm = SlowLLM([])
     llm.timeout = 1
-    out = generate("s", lines, llm, pz, Sandbox("unused"), k=5)
+    out = generate("s", lines, llm, pz, Sandbox("unused"), k=5, mode="vrl")
     assert out.status == "needs_escalation" and "too slow" in out.reason
 
 
@@ -151,7 +151,7 @@ def test_answer_formats():
 @needs_vector
 def test_fenced_answer_goes_through_the_loop(pz, lines):
     llm = ScriptedLLM([f"STATUS: ok\nREASON: r\n```vrl\n{GOOD}\n```"])
-    out = generate("s", lines, llm, pz, Sandbox(VECTOR), k=10)
+    out = generate("s", lines, llm, pz, Sandbox(VECTOR), k=10, mode="vrl")
     assert out.status == "proposed"
 
 
@@ -162,7 +162,7 @@ def test_truncated_answer_gets_specific_feedback(pz, lines):
             return Reply("STATUS: ok\n```vrl\n.a = 1", 0.1, finish_reason="length")
 
     llm = Truncating([])
-    out = generate("s", lines, llm, pz, Sandbox("unused"), k=5, max_attempts=2)
+    out = generate("s", lines, llm, pz, Sandbox("unused"), k=5, max_attempts=2, mode="vrl")
     assert out.attempts[0].error_class == "format"
     assert "cut off" in llm.sent[-1]
 

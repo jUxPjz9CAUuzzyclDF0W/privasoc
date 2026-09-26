@@ -56,7 +56,7 @@ Framing sessions: 2026-09-26 (7 rounds). Previous Codex prototype (`soc-workbenc
 | D24 | Interface | CLI (Typer) + web UI + static HTML evaluation report. |
 | D25 | Sensitive-value detection | Typed regex detectors (IPv4/v6, email, MAC, FQDN, SID, user paths, URL) + key=value heuristics + **local LLM pass** for residual entities. Improves over time (D33). Tokens are **shape-preserving** (an IP stays a valid IP, an email an email). Residual leakage is measured and published. |
 | D26 | Unknown format | Lines not matched by any approved parser go to a per-source **quarantine** (SQLite `unparsed`), clustered by template (Drain, D35). |
-| D27 | LLM output | A VRL program only. K = 10 sample lines, N = 5 attempts, compiler error or field diff fed back on failure. |
+| D27 | LLM output | ~~A VRL program only~~ extended by D44. A VRL program only. K = 10 sample lines, N = 5 attempts, compiler error or field diff fed back on failure. |
 | D28 | Models | **One small local model** with task-specific prompts. **API fallback** to any provider, always behind pseudonymisation. |
 | D29 | Web UI | Parser review page (samples, VRL, tests, ECS output, approve/reject) **plus alerts and triage view**. |
 | D30 | Sources | Source-agnostic: generic inputs (syslog, files). No device-specific assumption. |
@@ -77,6 +77,7 @@ Framing sessions: 2026-09-26 (7 rounds). Previous Codex prototype (`soc-workbenc
 | D40 | Triage and rules | Structured JSON: verdict (`true_positive \| false_positive \| needs_investigation`), confidence, summary, ATT&CK techniques, investigation steps, suggested SQL. Re-identified only at display time. SigmaHQ rules auto-enabled when their `logsource` matches present data. |
 | D41 | Access and secrets | UI on the LAN behind a single access token. Mapping vault in a separate file (mode 600), **encrypted at rest**; HMAC and encryption keys in `.env`. |
 | D42 | Parser library | Approved parsers are indexed; the 2-3 nearest (Drain template similarity) are injected as examples. "Learning curve" evaluation: F1 and attempts versus library size. |
+| D44 | Structured mode | After two real runs where `qwen3:8b` could not produce valid free-form VRL (syntax from other languages, `+=`, unassigned variables, a single regex for 7 line shapes), a second mode is added and made the default: the model answers with a YAML spec (prefix regex, timestamp, constants, and one regex + ECS mapping per line shape). privasoc validates it in Python (unsupported Rust-regex features, unknown groups, sample lines matching no shape) and compiles it to VRL with a deterministic, tested compiler; lines matching no shape abort and return to quarantine. Same sandbox, ECS and grounding checks afterwards. Free-form VRL stays available (`--mode vrl`), and the evaluation compares both modes: small model with structure versus free-form code. |
 | D43 | Anonymity | The project is anonymous: no real name, personal handle or real homelab address anywhere (code, tests, docs, licence, git identity). Test data uses placeholders (`jdoe`, `laptop-01`, 192.168.1.0/24). Licence holder: "privasoc contributors". Commits use the GitHub no-reply identity. |
 
 ## Implementation notes
