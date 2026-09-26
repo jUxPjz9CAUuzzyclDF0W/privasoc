@@ -34,3 +34,30 @@ def test_model_prefix_replaced_by_detected_header():
     assert any("replaced by the detected" in r for r in spec.repairs)
     assert structured.check_lines(spec, lines) == []
     assert re.search("sshd", "sshd")
+
+
+def test_kv_lines_prefix_and_misplaced_mappings_are_repaired():
+    """Regression (FortiGate, qwen3:8b): prefix regex over the pairs, ECS mappings to kv
+    keys under `fields`, and a kv mapping written key: ecs."""
+    lines = [
+        f'date=2020-09-28 time=15:36:2{i} logid="0114" type="event" srcip=10.0.0.{i} '
+        f"dstip=10.9.9.9 dstport={i}443"
+        for i in range(6)
+    ]
+    lines += ['date=2021-01-26 time=15:51:37 type="traffic" level="notice" srcip=10.1.1.1']
+    st = analyze.detect(lines)
+    spec = structured.load(
+        "prefix: '^date=(?P<d>\\S+) time=(?P<t>\\S+) logid=\"(?P<logid>\\d+)\" (?P<rest>.*)$'\n"
+        "body: rest\nfields: {source.ip: srcip, destination.port: dstport}\n"
+        "kv: {field_delimiter: ' ', value_delimiter: '=', fields: {dstip: destination.ip}}",
+        lines,
+        st,
+    )
+    text = "\n".join(spec.repairs)
+    assert "prefix: removed" in text and "moved `source.ip: srcip`" in text and "swapped" in text
+    assert spec.kv["fields"] == {
+        "source.ip": "srcip",
+        "destination.port": "dstport",
+        "destination.ip": "dstip",
+    }
+    assert structured.check_lines(spec, lines) == []

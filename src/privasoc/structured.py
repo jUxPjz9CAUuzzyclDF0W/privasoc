@@ -185,8 +185,11 @@ def _ts_parses(value: str, fmt: str) -> bool:
 def adopt_header(raw: dict, lines: list[str], structure) -> list[str]:
     """If the model's prefix matches fewer lines than the header privasoc detected, use the
     detected one (value-free: only the regex and timestamp format change)."""
-    if structure is None or not structure.prefix or not lines:
+    if structure is None or not lines:
         return []
+    repairs = _adopt_kv(raw, lines, structure)
+    if not structure.prefix:
+        return repairs
 
     def rate(rx: str | None) -> float:
         try:
@@ -201,10 +204,53 @@ def adopt_header(raw: dict, lines: list[str], structure) -> list[str]:
     raw["prefix"], raw["body"] = structure.prefix, "rest"
     if structure.timestamp_format:
         raw["timestamp"] = {"group": "ts", "format": structure.timestamp_format}
-    return [
+    return repairs + [
         f"prefix: replaced by the detected {structure.header} header (yours matched "
         f"{rate(mine):.0%} of the lines)"
     ]
+
+
+def _adopt_kv(raw: dict, lines: list[str], structure) -> list[str]:
+    """Key/value lines: fix the mistakes small models make with them (seen on FortiGate): a
+    prefix regex over the pairs that only matches some lines, ECS mappings to key names put
+    under `fields` instead of `kv.fields`, and kv mappings written `key: ecs.field`."""
+    if not structure.kv:
+        return []
+    repairs = []
+    keys = {k for k, _ in structure.keys}
+    if not structure.prefix and isinstance(raw.get("prefix"), str):
+        try:
+            c = re.compile(raw["prefix"])
+            hit = sum(bool(c.search(ln)) for ln in lines) / len(lines)
+        except re.error:
+            hit = 0.0
+        if hit < 0.9:
+            for k in ("prefix", "body", "timestamp"):
+                raw.pop(k, None)
+            repairs.append(
+                f"prefix: removed (it matched {hit:.0%} of the lines; these lines are "
+                "key/value pairs from the start)"
+            )
+    kv = raw.get("kv") if isinstance(raw.get("kv"), dict) else None
+    if kv is None:
+        vd, fd = structure.kv
+        kv = raw["kv"] = {"value_delimiter": vd, "field_delimiter": fd, "fields": {}}
+    kv_fields = kv.get("fields") if isinstance(kv.get("fields"), dict) else {}
+    kv["fields"] = kv_fields
+    fields = raw.get("fields") if isinstance(raw.get("fields"), dict) else {}
+    for ecs, name in list(fields.items()):
+        if str(name) in keys:
+            kv_fields.setdefault(ecs, str(name))
+            del fields[ecs]
+            repairs.append(f"fields: moved `{ecs}: {name}` to kv.fields (`{name}` is a key)")
+    for ecs, name in list(kv_fields.items()):
+        if str(ecs) in keys and str(name) not in keys and "." in str(name):
+            del kv_fields[ecs]
+            kv_fields[str(name)] = str(ecs)
+            repairs.append(f"kv.fields: swapped `{ecs}: {name}` (key and ECS field inverted)")
+    if not kv_fields:
+        raw.pop("kv")
+    return repairs
 
 
 def autorepair(raw: dict, lines: list[str]) -> list[str]:

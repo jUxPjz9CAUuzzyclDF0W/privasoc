@@ -159,6 +159,9 @@ class RunResult:
     ungrounded_values: int
     auto_repairs: int
     error_classes: list[str]
+    # Debugging aids, kept in the local results file only (pseudonymised fixture text).
+    last_details: list[str] | None = None
+    last_spec: str | None = None
 
     def key(self) -> tuple:
         return (self.fixture, self.mode, self.provider, self.model, self.pseudo, self.run)
@@ -225,6 +228,8 @@ def run_one(
         int(m.get("ungrounded_values", 0) or 0),
         int(m.get("auto_repairs", 0) or 0),
         [a.error_class or "ok" for a in out.attempts],
+        [d[:240] for d in (out.attempts[-1].details if out.attempts else [])[:4]],
+        ((out.spec or (out.attempts[-1].spec if out.attempts else None)) or "")[:2000],
     )
 
 
