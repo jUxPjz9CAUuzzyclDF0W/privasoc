@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     llm_remote_url: str = ""
     llm_remote_model: str = ""
     llm_remote_api_key: SecretStr = SecretStr("")
+    # D34: automatic API fallback is off unless explicitly enabled
+    auto_fallback: bool = False
+
+    vector_bin: str = "vector"
+    vector_dir: Path = Path("./vector")
+    sample_size: int = 10  # D27: K
+    max_attempts: int = 5  # D27: N
 
     @property
     def db_path(self) -> Path:

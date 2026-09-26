@@ -9,7 +9,7 @@ tests it in Vector's sandbox, and asks a human to approve it. Nothing leaves you
 machine un-pseudonymised: every prompt, local or remote, goes through a
 shape-preserving pseudonymisation layer, and leakage is measured, not assumed.
 
-> Status: **step 1 of 8** (core). See the [roadmap](#roadmap) and every design
+> Status: **step 2 of 8** (parser generation loop). See the [roadmap](#roadmap) and every design
 > decision, with its rationale, in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Why
@@ -40,19 +40,32 @@ flowchart LR
   E --> R[Sigma rules] --> TR[AI triage]
 ```
 
-## Quick start (step 1)
+## Quick start
+
+Requirements: [uv](https://docs.astral.sh/uv/), the [Vector](https://vector.dev/download/)
+binary (its VRL runtime is the parser sandbox) and any OpenAI-compatible LLM server,
+e.g. [Ollama](https://ollama.com) with `ollama pull qwen3:8b`.
 
 ```bash
 uv sync
-uv run privasoc init                         # writes .env with fresh secrets
-uv run privasoc serve &                      # ingestion API on 127.0.0.1:8000
-uv run privasoc import sample.log --source pihole
-uv run privasoc quarantine                   # lines per source
-uv run privasoc quarantine --source pihole   # pseudonymised sample
+uv run privasoc init            # writes .env with fresh secrets
+# edit .env: PRIVASOC_LLM_LOCAL_MODEL=qwen3:8b, PRIVASOC_VECTOR_BIN=/path/to/vector
+
+uv run privasoc import examples/pihole.log --source pihole   # synthetic sample data
+uv run privasoc quarantine                                   # unknown lines per source
+uv run privasoc propose --source pihole                      # the LLM writes a parser
+uv run privasoc parsers show <id>                            # VRL, checks, preview
+uv run privasoc parsers approve <id>                         # human decision
 ```
 
-With Docker: `docker compose up -d`, then send syslog to UDP/TCP `5514` or drop
-`*.log` files in `data/inbox/`.
+`propose` prints each attempt (`compile`, `runtime`, `schema`, `ungrounded` or `ok`).
+When the local model gives up, stagnates or hallucinates, it stops and suggests
+`--provider remote`; set `PRIVASOC_AUTO_FALLBACK=true` to escalate automatically. Either way
+the remote model only ever sees pseudonymised lines.
+
+Live mode: `docker compose up -d`, then send syslog to UDP/TCP `5514` or drop `*.log`
+files in `data/inbox/`. Approving a parser regenerates `vector/pipeline.yaml`, which Vector
+hot-reloads.
 
 Example (real output):
 
@@ -80,7 +93,7 @@ on free text; step 5 adds a local-LLM pass and the evaluation publishes the rate
 ## Roadmap
 
 1. **Core**: Vector → quarantine → SQLite, regex pseudonymisation, CLI. ✅
-2. Parser generation loop: sandbox, Drain sampling, anti-hallucination, API fallback.
+2. **Parser generation loop**: sandbox, Drain sampling, anti-hallucination, API fallback. ✅
 3. Parser evaluation on Elastic integration fixtures + HTML report.
 4. Web review UI (parsers, learned pseudonymisation).
 5. Local-LLM pseudonymisation that learns (human-approved).

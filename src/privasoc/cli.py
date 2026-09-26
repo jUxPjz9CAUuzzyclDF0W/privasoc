@@ -10,7 +10,7 @@ from typing import Annotated
 import typer
 from cryptography.fernet import Fernet
 
-from privasoc.config import get_settings
+from privasoc.config import Settings, get_settings
 from privasoc.pseudo import Pseudonymizer, Vault
 from privasoc.store import Record, Store
 
@@ -56,9 +56,11 @@ def serve() -> None:
     """Run the API (ingestion endpoint for Vector)."""
     import uvicorn
 
+    from privasoc import vectorgen
     from privasoc.api import create_app
 
     s = get_settings()
+    vectorgen.write(Store(s.db_path).parsers("approved"), s.vector_dir)
     uvicorn.run(create_app(s), host=s.host, port=s.port)
 
 
@@ -114,6 +116,149 @@ def pseudo(
             if leaks:
                 raise typer.Exit(code=2)  # never print a line that still leaks
             typer.echo(r.text)
+
+
+parsers_app = typer.Typer(help="Review AI-generated parsers (D23).", no_args_is_help=True)
+app.add_typer(parsers_app, name="parsers")
+
+
+def _endpoint(s: Settings, provider: str):
+    from privasoc.llm import Endpoint
+
+    if provider == "remote":
+        return Endpoint(
+            "remote", s.llm_remote_url, s.llm_remote_model, s.llm_remote_api_key.get_secret_value()
+        )
+    return Endpoint("local", s.llm_local_url, s.llm_local_model)
+
+
+def _run_generation(source: str, provider: str, store: Store, s: Settings, lines: list[str]):
+    from privasoc.generator import generate
+    from privasoc.llm import LLMClient
+    from privasoc.sandbox import Sandbox
+
+    llm = LLMClient(_endpoint(s, provider), call_log=store.log_llm_call)
+    return generate(
+        source,
+        lines,
+        llm,
+        _pseudonymizer(),
+        Sandbox(s.vector_bin),
+        k=s.sample_size,
+        max_attempts=s.max_attempts,
+    )
+
+
+@app.command()
+def propose(
+    source: Annotated[str, typer.Option(help="Quarantined source to learn")],
+    provider: Annotated[str, typer.Option(help="local (default) or remote")] = "local",
+) -> None:
+    """Ask the LLM to write a parser for a quarantined source."""
+    s = get_settings()
+    store = Store(s.db_path)
+    lines = store.quarantine_lines(source)
+    if not lines:
+        raise typer.BadParameter(f"no quarantined lines for {source!r}")
+    typer.echo(f"{len(lines)} lines, asking {provider} model...")
+    out = _run_generation(source, provider, store, s, lines)
+    if out.status == "needs_escalation" and provider == "local":
+        if s.auto_fallback and s.llm_remote_url:
+            typer.echo(f"local model: {out.reason}; falling back to remote API (pseudonymised)")
+            store.save_parser(
+                out.parser_id, source, "failed", out.provider, out.model, out.vrl, out.report()
+            )
+            out = _run_generation(source, "remote", store, s, lines)
+        else:
+            typer.echo(
+                f"local model: {out.reason}. Retry with --provider remote if you accept "
+                "sending pseudonymised samples to the API."
+            )
+    store.save_parser(
+        out.parser_id, source, out.status, out.provider, out.model, out.vrl, out.report()
+    )
+    for a in out.attempts:
+        typer.echo(f"  attempt {a.n}: {a.error_class or 'ok'} ({a.latency_s:.1f}s)")
+    typer.echo(f"{out.parser_id}: {out.status} ({out.reason})  {out.metrics}")
+    if out.status == "proposed":
+        typer.echo(f"Review with: privasoc parsers show {out.parser_id}")
+
+
+@parsers_app.command("list")
+def parsers_list(status: str | None = None) -> None:
+    for p in Store(get_settings().db_path).parsers(status):
+        m = p["report"].get("metrics", {})
+        typer.echo(
+            f"{p['id']}  {p['status']:17} {p['source']:25} {p['provider']}:{p['model']}"
+            f"  attempts={m.get('attempts')}"
+        )
+
+
+@parsers_app.command("show")
+def parsers_show(parser_id: str) -> None:
+    """Show the VRL, checks and a preview on the latest real lines (local display only)."""
+    p = Store(get_settings().db_path).parser(parser_id)
+    if not p:
+        raise typer.BadParameter("unknown parser")
+    r = p["report"]
+    typer.echo(
+        f"# {p['id']}  source={p['source']}  status={p['status']}  "
+        f"model={p['provider']}:{p['model']}"
+    )
+    typer.echo(f"# {r.get('reason')}  metrics={r.get('metrics')}")
+    typer.echo("\n--- VRL ---\n" + (p["vrl"] or "(none)"))
+    typer.echo("\n--- preview on latest real lines ---")
+    for item in r.get("preview", []):
+        typer.echo(f"raw: {item['raw']}")
+        typer.echo(
+            f"ecs: {item['ecs'] if item['ecs'] is not None else 'ERROR ' + str(item['error'])}\n"
+        )
+
+
+def _set_status(parser_id: str, status: str) -> None:
+    from privasoc import vectorgen
+
+    s = get_settings()
+    store = Store(s.db_path)
+    p = store.parser(parser_id)
+    if not p:
+        raise typer.BadParameter("unknown parser")
+    if status == "approved" and p["status"] != "proposed":
+        raise typer.BadParameter(f"only a proposed parser can be approved (is {p['status']})")
+    previous = p["status"]
+    active = [x["id"] for x in store.parsers("approved") if x["source"] == p["source"]]
+    store.set_parser_status(parser_id, status)
+    path = vectorgen.write(store.parsers("approved"), s.vector_dir)
+    error = vectorgen.validate(s.vector_bin, s.vector_dir)
+    if error:  # never leave Vector with a config it cannot load
+        store.set_parser_status(parser_id, "rejected" if status == "approved" else previous)
+        for pid in active:  # restore the parser that was active before
+            store.set_parser_status(pid, "approved")
+        vectorgen.write(store.parsers("approved"), s.vector_dir)
+        typer.echo(error, err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{parser_id} {status}; regenerated and validated {path}")
+
+
+@parsers_app.command("approve")
+def parsers_approve(parser_id: str) -> None:
+    """Activate a proposed parser (human decision, D23)."""
+    _set_status(parser_id, "approved")
+
+
+@parsers_app.command("reject")
+def parsers_reject(parser_id: str) -> None:
+    _set_status(parser_id, "rejected")
+
+
+@app.command("vector-config")
+def vector_config() -> None:
+    """(Re)generate vector/pipeline.yaml from approved parsers."""
+    from privasoc import vectorgen
+
+    s = get_settings()
+    path = vectorgen.write(Store(s.db_path).parsers("approved"), s.vector_dir)
+    typer.echo(f"wrote {path}")
 
 
 if __name__ == "__main__":

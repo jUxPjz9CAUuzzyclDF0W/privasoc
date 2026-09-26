@@ -32,21 +32,5 @@ transforms:
       } else {
         .privasoc_source = "syslog:" + (string(.host) ?? "unknown")
       }
-      # Step 2: approved parsers are generated into parsers/ and applied here; each sets
-      # .ecs and .parser_id. Lines no parser recognises go to the quarantine.
 
-sinks:
-  privasoc:
-    type: http
-    inputs: [tag_source]
-    uri: ${PRIVASOC_INGEST_URL:-http://privasoc:8000/ingest}
-    method: post
-    encoding:
-      codec: json
-      only_fields: [message, privasoc_source, timestamp, ecs, parser_id]
-    framing: { method: newline_delimited }
-    auth:
-      strategy: bearer
-      token: ${PRIVASOC_API_TOKEN}
-    batch: { max_events: 500, timeout_secs: 1 }
-    request: { retry_attempts: 10 }
+# Routing, approved parsers and the sink live in pipeline.yaml (generated).

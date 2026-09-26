@@ -89,6 +89,12 @@ Decisions taken while building, same format.
 | I3 | Propagation | A value detected once in a line is replaced everywhere in that line (catches free-text mentions of a keyed user). |
 | I4 | Leak check | Word-boundary, case-insensitive search of every original in the outgoing text. The CLI refuses to print a line that still leaks. |
 | I5 | Vault | SQLite, lookup by HMAC digest, originals encrypted with Fernet, file mode 600. |
+| I6 | Sandbox | `vector vrl --print-object`, one process per line (runtime errors go to stderr without line alignment), empty environment, 20 s timeout, static denylist of host-reading functions (`get_env_var`, `get_hostname`, secrets, DNS). |
+| I7 | Parser contract | The program receives `{message}` and assigns ECS fields on the root. At deployment it is wrapped: envelope saved, event reset (JSON round-trip so Vector's type checker sees an open object), `event.original` added, envelope rebuilt with `ecs` and `parser_id`. |
+| I8 | Deployment | `vector/vector.yaml` = sources; `vector/pipeline.yaml` generated from approved parsers (route by source, one remap per parser, `drop_on_error` + `reroute_dropped` so failures return to quarantine). Every approval is checked with `vector validate`; a config Vector cannot load is rolled back. Vector runs with `--watch-config`. |
+| I9 | Loop checks | In order: JSON answer, self-reported status (D38a), compile, runtime on every sample line, ECS validation (field sets, enumerations, IP and port types), grounding (D38b). Stagnation = same failure class twice in a row (D38c). A proposal is then re-run locally on the *real* lines (`real_lines_ok`) to prove that shape-preserving pseudonyms did not mislead the parser. |
+| I10 | Leak guard | `LLMClient.chat` refuses to send any message containing an original value, whatever the provider. Only sizes, latency and token counts of calls are logged, never content. |
+| I11 | Local model | The benchmark (D36) could not run from the build environment (LAN blocked); it runs on the user's machine. First candidate: `qwen3:8b` via Ollama. |
 
 ## Dropped (from the Codex prototype)
 - "Firewall/EDR alerts only, no raw logs": replaced by D2.

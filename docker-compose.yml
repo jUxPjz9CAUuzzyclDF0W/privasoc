@@ -7,15 +7,17 @@ services:
     environment:
       PRIVASOC_HOST: 0.0.0.0
       PRIVASOC_DATA_DIR: /data
+      PRIVASOC_VECTOR_DIR: /vector
     volumes:
       - ./data:/data
+      - ./vector:/vector   # approvals regenerate vector/pipeline.yaml
     ports:
       - "${PRIVASOC_BIND:-127.0.0.1}:8000:8000"
     restart: unless-stopped
 
   vector:
     image: timberio/vector:0.55.0-debian
-    command: ["--config", "/etc/vector/vector.yaml"]
+    command: ["--config-dir", "/etc/vector", "--watch-config"]
     env_file: .env
     environment:
       PRIVASOC_INGEST_URL: http://privasoc:8000/ingest

@@ -7,7 +7,9 @@ license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "cryptography>=43",
+    "drain3>=0.9.11",
     "fastapi>=0.115",
+    "httpx>=0.28.1",
     "pydantic-settings>=2.4",
     "typer>=0.12",
     "uvicorn>=0.30",
@@ -30,6 +32,10 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S"]
 ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]  # VRL fixtures are kept verbatim
+"src/privasoc/prompts.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

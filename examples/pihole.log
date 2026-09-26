@@ -1,0 +1,60 @@
+Sep 26 10:00:00 dnsmasq[812]: reply updates.example.org is 203.0.113.20
+Sep 26 10:00:01 dnsmasq[812]: forwarded example.com to 1.1.1.1
+Sep 26 10:00:02 dnsmasq[812]: query[A] updates.example.org from 192.168.1.57
+Sep 26 10:00:03 dnsmasq[812]: query[A] example.com from 192.168.1.34
+Sep 26 10:00:04 dnsmasq[812]: query[HTTPS] example.com from 192.168.1.34
+Sep 26 10:00:05 dnsmasq[812]: forwarded example.com to 1.1.1.1
+Sep 26 10:00:06 dnsmasq[812]: forwarded updates.example.org to 1.1.1.1
+Sep 26 10:00:07 dnsmasq[812]: query[AAAA] cdn.example.net from 192.168.1.21
+Sep 26 10:00:08 dnsmasq[812]: gravity blocked cdn.example.net is 0.0.0.0
+Sep 26 10:00:09 dnsmasq[812]: forwarded example.com to 1.1.1.1
+Sep 26 10:00:10 dnsmasq[812]: forwarded cdn.example.net to 1.1.1.1
+Sep 26 10:00:11 dnsmasq[812]: query[HTTPS] example.com from 192.168.1.21
+Sep 26 10:00:12 dnsmasq[812]: forwarded ads.example.io to 1.1.1.1
+Sep 26 10:00:13 dnsmasq[812]: query[AAAA] cdn.example.net from 192.168.1.34
+Sep 26 10:00:14 dnsmasq[812]: forwarded updates.example.org to 1.1.1.1
+Sep 26 10:00:15 dnsmasq[812]: reply ads.example.io is 203.0.113.75
+Sep 26 10:00:16 dnsmasq[812]: forwarded example.com to 1.1.1.1
+Sep 26 10:00:17 dnsmasq[812]: cached cdn.example.net is <CNAME>
+Sep 26 10:00:18 dnsmasq[812]: query[HTTPS] example.com from 192.168.1.34
+Sep 26 10:00:19 dnsmasq[812]: reply cdn.example.net is 203.0.113.154
+Sep 26 10:00:20 dnsmasq[812]: gravity blocked ads.example.io is 0.0.0.0
+Sep 26 10:00:21 dnsmasq[812]: reply ads.example.io is 203.0.113.17
+Sep 26 10:00:22 dnsmasq[812]: forwarded cdn.example.net to 1.1.1.1
+Sep 26 10:00:23 dnsmasq[812]: reply ads.example.io is 203.0.113.229
+Sep 26 10:00:24 dnsmasq[812]: cached cdn.example.net is <CNAME>
+Sep 26 10:00:25 dnsmasq[812]: query[HTTPS] updates.example.org from 192.168.1.34
+Sep 26 10:00:26 dnsmasq[812]: query[AAAA] updates.example.org from 192.168.1.21
+Sep 26 10:00:27 dnsmasq[812]: cached ads.example.io is <CNAME>
+Sep 26 10:00:28 dnsmasq[812]: forwarded example.com to 1.1.1.1
+Sep 26 10:00:29 dnsmasq[812]: gravity blocked cdn.example.net is 0.0.0.0
+Sep 26 10:00:30 dnsmasq[812]: forwarded cdn.example.net to 1.1.1.1
+Sep 26 10:00:31 dnsmasq[812]: query[A] ads.example.io from 192.168.1.34
+Sep 26 10:00:32 dnsmasq[812]: reply updates.example.org is 203.0.113.5
+Sep 26 10:00:33 dnsmasq[812]: query[AAAA] updates.example.org from 192.168.1.34
+Sep 26 10:00:34 dnsmasq[812]: query[HTTPS] ads.example.io from 192.168.1.21
+Sep 26 10:00:35 dnsmasq[812]: reply cdn.example.net is 203.0.113.133
+Sep 26 10:00:36 dnsmasq[812]: gravity blocked example.com is 0.0.0.0
+Sep 26 10:00:37 dnsmasq[812]: query[AAAA] ads.example.io from 192.168.1.57
+Sep 26 10:00:38 dnsmasq[812]: forwarded ads.example.io to 1.1.1.1
+Sep 26 10:00:39 dnsmasq[812]: forwarded example.com to 1.1.1.1
+Sep 26 10:00:40 dnsmasq[812]: query[HTTPS] cdn.example.net from 192.168.1.21
+Sep 26 10:00:41 dnsmasq[812]: query[HTTPS] updates.example.org from 192.168.1.21
+Sep 26 10:00:42 dnsmasq[812]: gravity blocked example.com is 0.0.0.0
+Sep 26 10:00:43 dnsmasq[812]: reply ads.example.io is 203.0.113.246
+Sep 26 10:00:44 dnsmasq[812]: query[AAAA] cdn.example.net from 192.168.1.34
+Sep 26 10:00:45 dnsmasq[812]: forwarded ads.example.io to 1.1.1.1
+Sep 26 10:00:46 dnsmasq[812]: reply updates.example.org is 203.0.113.191
+Sep 26 10:00:47 dnsmasq[812]: query[HTTPS] ads.example.io from 192.168.1.34
+Sep 26 10:00:48 dnsmasq[812]: query[HTTPS] updates.example.org from 192.168.1.21
+Sep 26 10:00:49 dnsmasq[812]: query[HTTPS] example.com from 192.168.1.57
+Sep 26 10:00:50 dnsmasq[812]: gravity blocked example.com is 0.0.0.0
+Sep 26 10:00:51 dnsmasq[812]: query[A] cdn.example.net from 192.168.1.57
+Sep 26 10:00:52 dnsmasq[812]: query[HTTPS] cdn.example.net from 192.168.1.21
+Sep 26 10:00:53 dnsmasq[812]: reply updates.example.org is 203.0.113.60
+Sep 26 10:00:54 dnsmasq[812]: reply ads.example.io is 203.0.113.9
+Sep 26 10:00:55 dnsmasq[812]: query[AAAA] ads.example.io from 192.168.1.34
+Sep 26 10:00:56 dnsmasq[812]: gravity blocked cdn.example.net is 0.0.0.0
+Sep 26 10:00:57 dnsmasq[812]: query[AAAA] cdn.example.net from 192.168.1.57
+Sep 26 10:00:58 dnsmasq[812]: query[AAAA] updates.example.org from 192.168.1.21
+Sep 26 10:00:59 dnsmasq[812]: cached ads.example.io is <CNAME>

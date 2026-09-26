@@ -1,5 +1,7 @@
 FROM python:3.12-slim
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
+# Vector's VRL runtime is the parser sandbox (D9)
+COPY --from=timberio/vector:0.55.0-debian /usr/bin/vector /usr/local/bin/vector
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
