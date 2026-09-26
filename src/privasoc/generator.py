@@ -105,7 +105,12 @@ def evaluate(sandbox: Sandbox, vrl: str, lines: list[str]) -> tuple[str | None, 
         return "compile", [res.compile_error[:1500]], {"compiled": False}
     metrics = {"compiled": True, "lines": len(lines), "parsed": len(res.outputs)}
     if res.runtime_errors:
-        details = [f"line {i + 1}: {r.error[:300]}" for i, r in enumerate(res.lines) if r.error]
+        # Show the failing line itself: the model must see what its regex did not match.
+        details = [
+            f"line {i + 1} `{lines[i][:200]}`: {r.error[:200]}"
+            for i, r in enumerate(res.lines)
+            if r.error
+        ]
         return "runtime", details, metrics
     schema, ungr, n_values = [], [], 0
     for i, (r, raw) in enumerate(zip(res.lines, lines, strict=True)):

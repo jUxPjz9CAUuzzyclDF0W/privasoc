@@ -31,6 +31,10 @@ network.protocol, user.name, host.name, host.hostname, process.name, process.pid
 dns.question.name, dns.question.type, dns.answers, observer.vendor, observer.product,
 log.level, rule.name, url.original, http.request.method, http.response.status_code
 
+Lines of one source often have several shapes (see the templates): parse the common
+prefix with one parse_regex!, then try each shape with parse_regex(...) ?? {} and if/else,
+so that no line makes the program fail.
+Arrays: arr = push(arr, x); there is no `+=`.
 VRL is not Python or JavaScript: there are no methods. Write split(value, "x"), not
 value.split("x"); index arrays with value[0]; strings use double quotes, regexes r'...'.
 
@@ -90,6 +94,7 @@ VRL_HINTS = {
     "E110": "A condition can fail: use a `!` function or `?? false` inside the `if`.",
     "E105": 'Unknown function: VRL has no methods; use functions like split(x, ",").',
     "E204": "Syntax error: check brackets, quotes and that regexes use r'...'.",
+    "E203": "Syntax error: VRL has no `+=`, `++` or `!?`; use x = push(x, y) for arrays.",
 }
 
 
