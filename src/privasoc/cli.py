@@ -303,5 +303,122 @@ def vector_config() -> None:
     typer.echo(f"wrote {path}")
 
 
+eval_app = typer.Typer(help="Evaluation harness (step 3).", no_args_is_help=True)
+app.add_typer(eval_app, name="eval")
+
+
+def _fixture_dir(s: Settings) -> Path:
+    return s.data_dir / "fixtures"
+
+
+@eval_app.command("fetch")
+def eval_fetch() -> None:
+    """Download the Elastic ground-truth fixtures (not redistributed, D20)."""
+    from privasoc import fixtures
+
+    names = fixtures.fetch(_fixture_dir(get_settings()))
+    typer.echo(f"fetched {len(names)} fixtures @ {fixtures.ELASTIC_SHA[:10]}: {', '.join(names)}")
+
+
+@eval_app.command("leak")
+def eval_leak(out: Path = Path("reports/leakage.json")) -> None:
+    """Measure residual leakage of the pseudonymiser on the fixtures (no LLM needed)."""
+    import json
+
+    from privasoc import evaluation, fixtures
+
+    s = get_settings()
+    result = evaluation.leakage(fixtures.load(_fixture_dir(s)), _pseudonymizer())
+    out.parent.mkdir(parents=True, exist_ok=True)
+    # Example values come from Elastic's (ELv2) fixtures: shown locally, never written out.
+    saved = {k: v for k, v in result.items() if k != "examples"}
+    out.write_text(json.dumps(saved, indent=2), encoding="utf-8")
+    typer.echo(
+        f"{result['leaked']}/{result['values']} sensitive values leaked "
+        f"({result['leak_rate']:.1%}); details in {out}"
+    )
+    for field, v in result["per_field"].items():
+        typer.echo(f"  {field:24} {v['leaked']:>4}/{v['total']:<4} {v['rate']:.0%}")
+
+
+@eval_app.command("run")
+def eval_run(
+    runs: Annotated[int, typer.Option(help="Runs per fixture and configuration (k)")] = 3,
+    modes: Annotated[str, typer.Option(help="Comma-separated: structured,vrl")] = "structured",
+    providers: Annotated[str, typer.Option(help="Comma-separated: local,remote")] = "local",
+    pseudo: Annotated[str, typer.Option(help="Comma-separated: on,off (off: local only)")] = "on",
+    only: Annotated[str | None, typer.Option(help="Comma-separated fixture names")] = None,
+    results: Path = Path("data/eval/results.jsonl"),
+) -> None:
+    """Run the parser-generation evaluation; resumes from existing results."""
+    from privasoc import evaluation, fixtures
+    from privasoc.llm import LLMClient
+    from privasoc.sandbox import Sandbox
+
+    s = get_settings()
+    fxs = fixtures.load(_fixture_dir(s), only.split(",") if only else None)
+    sandbox = Sandbox(s.vector_bin)
+    typer.echo(f"sandbox: {sandbox.check()}")
+    done = {
+        tuple(r[k] for k in ("fixture", "mode", "provider", "model", "pseudo", "run"))
+        for r in evaluation.load_results(results)
+    }
+    store = Store(s.db_path)
+    for provider in providers.split(","):
+        ep = _endpoint(s, provider)
+        llm = LLMClient(
+            ep, call_log=store.log_llm_call, timeout=s.llm_timeout, max_tokens=s.llm_max_tokens
+        )
+        llm.check()
+        for p in pseudo.split(","):
+            if p == "off" and ep.remote:
+                typer.echo("skipping pseudo=off for remote provider (never allowed)")
+                continue
+            pz = _pseudonymizer() if p == "on" else evaluation.IdentityPseudonymizer()
+            for mode in modes.split(","):
+                for fx in fxs:
+                    for run in range(1, runs + 1):
+                        key = (fx.name, mode, ep.name, ep.model, p == "on", run)
+                        if key in done:
+                            continue
+                        r = evaluation.run_one(
+                            fx,
+                            run,
+                            llm,
+                            pz,
+                            sandbox,
+                            mode,
+                            s.sample_size,
+                            s.max_attempts,
+                            s.min_coverage,
+                        )
+                        evaluation.append(results, r)
+                        typer.echo(
+                            f"{fx.name:11} {mode:10} {ep.model} pseudo={p} run {run}: "
+                            f"{r.status:16} F1={r.f1:.2f} parsed={r.heldout_parsed:.0%} "
+                            f"attempts={r.attempts} {r.llm_latency_s:.0f}s"
+                        )
+
+
+@eval_app.command("report")
+def eval_report(
+    results: Path = Path("data/eval/results.jsonl"),
+    leak: Path = Path("reports/leakage.json"),
+    out_dir: Path = Path("reports"),
+) -> None:
+    """Write reports/eval.md and reports/eval.html from the results."""
+    import json
+
+    from privasoc import evaluation, fixtures, report
+
+    rs = evaluation.load_results(results)
+    lk = json.loads(leak.read_text(encoding="utf-8")) if leak.exists() else None
+    md = report.markdown(report.summarise(rs), lk, report.meta(fixtures.ELASTIC_SHA))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "eval.md").write_text(md, encoding="utf-8")
+    (out_dir / "eval.html").write_text(report.to_html(md), encoding="utf-8")
+    typer.echo(md)
+
+
 if __name__ == "__main__":
     app()

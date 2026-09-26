@@ -204,6 +204,9 @@ def generate(
     mode: str = "structured",
     min_coverage: float = 0.8,
 ) -> Outcome:
+    if getattr(pz, "identity", False) and llm.endpoint.remote:
+        # D0b: the no-pseudonymisation ablation exists for local models only.
+        raise ValueError("pseudonymisation cannot be disabled for a remote provider")
     idx, clusters = stratified_sample(raw_lines, k)
     raw_sample = [raw_lines[i] for i in idx]
     pres = [pz.pseudonymize(line) for line in raw_sample]

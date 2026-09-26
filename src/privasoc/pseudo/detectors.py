@@ -143,7 +143,7 @@ _SID = re.compile(r"\bS-1-5-21-\d+-\d+-\d+(?:-\d+)?\b")
 _MAC = re.compile(
     r"(?<![0-9A-Fa-f:-])(?:[0-9A-Fa-f]{2}([:-]))(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:-])"
 )
-_IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
+_IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\d|\.\d)")
 _IPV6 = re.compile(r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:])")
 _FQDN = re.compile(
     r"(?<![\w@.\-/\\])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,24}(?![\w-])"
@@ -153,16 +153,18 @@ _NIX_PATH_USER = re.compile(r"(?<![\w.])/(?:home|Users)/([^/\s\"',;]+)")
 _TOKEN = re.compile(r"\b(?:user|host)-[0-9a-f]{6}\b")
 
 _USER_KEYS = (
-    r"user(?:_?name)?|suser|duser|src_?user(?:_?name)?|dst_?user(?:_?name)?|account(?:_?name)?"
+    r"user(?:_?name)?|suser|duser|usr|xauthuser|remuser|administrator|src_?user(?:_?name)?"
+    r"|dst_?user(?:_?name)?|account(?:_?name)?"
     r"|login|uid|owner|target_?user(?:_?name)?|subject_?user(?:_?name)?"
 )
 _HOST_KEYS = (
     r"host(?:_?name)?|shost|dhost|src_?host|dst_?host|computer(?:_?name)?|device(?:_?name)?"
     r"|machine(?:_?name)?|workstation(?:_?name)?|client_?name|origin_?sic_?name"
+    r"|devname|dvchost|dvc_?host|fqdn|server_?name|srcname|dstname"
 )
 _KV = re.compile(
-    rf"(?i)(?<![\w-])\"?(?:(?P<ukey>{_USER_KEYS})|(?P<hkey>{_HOST_KEYS}))\"?\s*[=:]\s*\"?"
-    r"(?P<val>[^\s\",;|}\]\[]+)"
+    rf"(?i)(?<![\w-])\"?(?:(?P<ukey>{_USER_KEYS})|(?P<hkey>{_HOST_KEYS}))\"?\s*[=:]\s*"
+    r"(?:\"(?P<qval>[^\"]{2,64})\"|(?P<val>[^\s\",;|}\]\[]+))"
 )
 _KV_SKIP = {
     "-",
@@ -215,6 +217,43 @@ def _ipv6_sensitive(value: str) -> bool:
     return not (ip.is_loopback or ip.is_unspecified or ip.is_multicast)
 
 
+# Context patterns (added after measuring leakage on real vendor formats, see I20).
+_SYSLOG_HOST = re.compile(  # RFC 3164 / RFC 5424 header: the field after the timestamp
+    r"^(?:<\d+>)?(?:\d+ )?(?:[A-Z][a-z]{2} +\d{1,2} (?:\d{4} )?\d\d:\d\d:\d\d"
+    r"|\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:?\d\d)?) (?P<host>[A-Za-z0-9][\w.-]*?):? "
+)
+_USER_PHRASES = re.compile(
+    r"(?i)\b(?:(?:accepted|failed) \w+ for (?:invalid user )?|(?:invalid|illegal) user |"
+    r"session (?:opened|closed) for user |for user |by user |user(?:name)? ['\"]|"
+    r"authentication failure for |user <)(?P<user>[A-Za-z0-9._\\$@-]{2,})"
+)
+_PRI_HOST = re.compile(r"^<\d+>(?P<host>[A-Za-z][\w.-]*) [%:]")
+_SUDO_USER = re.compile(r"\bsudo:\s+(?P<user>[A-Za-z0-9._-]+) : ")
+_DOMAIN_USER = re.compile(  # DOMAIN\user or DOMAIN\group\user
+    r"(?<![\w\\])[A-Za-z][\w-]{1,15}\\(?:[\w-]+\\)?(?P<user>[A-Za-z][\w.$-]*)"
+)
+_CLF_USER = re.compile(  # Common/Combined Log Format: host ident authuser [date]
+    r"^(?P<client>\S+) (?P<ident>\S+) (?P<auth>\S+) \[\d"
+)
+_URL_HOST = re.compile(r"\b[a-zA-Z][\w+.-]*://(?:[^@/\s]*@)?(?P<host>[\w.-]+)")
+_HEXRUN = re.compile(r"[0-9A-Fa-f:]{4,}")
+
+
+def _ipv6_candidates(text: str):
+    """Longest valid IPv6 inside each hex/colon run: handles `outside:2a02:...` prefixes,
+    which a lookbehind cannot tell apart from the address itself."""
+    for run in _HEXRUN.finditer(text):
+        s = run.group(0)
+        if s.count(":") < 2:
+            continue
+        starts = [0] + [i + 1 for i, c in enumerate(s) if c == ":"]
+        for st in starts:
+            cand = s[st:].rstrip(":") if not s.endswith("::") else s[st:]
+            if _ipv6_sensitive(cand):
+                yield run.start() + st, run.start() + st + len(cand), cand
+                break
+
+
 def detect(text: str) -> list[Entity]:
     """Return non-overlapping sensitive entities, sorted by position."""
     found: list[Entity] = []
@@ -233,9 +272,8 @@ def detect(text: str) -> list[Entity]:
     for m in _IPV4.finditer(text):
         if _ipv4_sensitive(m.group(0)):
             add("ipv4", m)
-    for m in _IPV6.finditer(text):
-        if _ipv6_sensitive(m.group(0)):
-            add("ipv6", m)
+    for a, b, v in _ipv6_candidates(text):
+        found.append(Entity("ipv6", a, b, v))
     for m in _FQDN.finditer(text):
         if _tld_ok(m.group(0)):
             add("fqdn", m)
@@ -243,11 +281,36 @@ def detect(text: str) -> list[Entity]:
         for m in rx.finditer(text):
             if m.group(1).lower() not in {"public", "default", "all users", "shared"}:
                 add("user", m, 1)
+    m = _SYSLOG_HOST.match(text)
+    if m and m.group("host").lower() not in _KV_SKIP and not m.group("host").isdigit():
+        add("host", m, "host")
+    for m in _USER_PHRASES.finditer(text):
+        if m.group("user").lower() not in _KV_SKIP:
+            add("user", m, "user")
+    m = _CLF_USER.match(text)
+    if m:
+        for g in ("ident", "auth"):
+            if m.group(g) != "-":
+                add("user", m, g)
+        if m.group("client").lower() not in _KV_SKIP:
+            add("host", m, "client")  # an IP here is won by the IP detectors (priority)
+    for m in _URL_HOST.finditer(text):
+        h = m.group("host")
+        if not _ipv4_sensitive(h) and "." in h and h.lower() != "localhost":
+            found.append(Entity("fqdn", m.start("host"), m.end("host"), h))
+    m = _PRI_HOST.match(text)
+    if m:
+        add("host", m, "host")
+    for m in _SUDO_USER.finditer(text):
+        add("user", m, "user")
+    for m in _DOMAIN_USER.finditer(text):
+        add("user", m, "user")
     for m in _KV.finditer(text):
-        val = m.group("val")
-        if val.lower() in _KV_SKIP or len(val) < 2:
+        g = "qval" if m.group("qval") is not None else "val"
+        val = m.group(g)
+        if val.lower() in _KV_SKIP or len(val) < 2 or val.lower().startswith("unknown"):
             continue
-        add("user" if m.group("ukey") else "host", m, "val")
+        add("user" if m.group("ukey") else "host", m, g)
 
     # Resolve overlaps: highest priority, then longest span, wins.
     found.sort(key=lambda e: (-PRIORITY[e.kind], -(e.end - e.start), e.start))

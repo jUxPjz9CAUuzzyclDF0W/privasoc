@@ -1,0 +1,87 @@
+{
+  "values": 2010,
+  "leaked": 163,
+  "leak_rate": 0.0811,
+  "per_field": {
+    "client.ip": {
+      "leaked": 0,
+      "total": 5,
+      "rate": 0.0
+    },
+    "destination.address": {
+      "leaked": 5,
+      "total": 220,
+      "rate": 0.023
+    },
+    "destination.domain": {
+      "leaked": 6,
+      "total": 14,
+      "rate": 0.429
+    },
+    "destination.ip": {
+      "leaked": 0,
+      "total": 320,
+      "rate": 0.0
+    },
+    "destination.nat.ip": {
+      "leaked": 0,
+      "total": 16,
+      "rate": 0.0
+    },
+    "destination.user.name": {
+      "leaked": 0,
+      "total": 3,
+      "rate": 0.0
+    },
+    "dns.question.name": {
+      "leaked": 0,
+      "total": 18,
+      "rate": 0.0
+    },
+    "host.hostname": {
+      "leaked": 0,
+      "total": 205,
+      "rate": 0.0
+    },
+    "observer.name": {
+      "leaked": 38,
+      "total": 120,
+      "rate": 0.317
+    },
+    "source.address": {
+      "leaked": 3,
+      "total": 281,
+      "rate": 0.011
+    },
+    "source.domain": {
+      "leaked": 4,
+      "total": 15,
+      "rate": 0.267
+    },
+    "source.ip": {
+      "leaked": 0,
+      "total": 429,
+      "rate": 0.0
+    },
+    "source.nat.ip": {
+      "leaked": 0,
+      "total": 29,
+      "rate": 0.0
+    },
+    "source.user.name": {
+      "leaked": 101,
+      "total": 177,
+      "rate": 0.571
+    },
+    "url.domain": {
+      "leaked": 0,
+      "total": 116,
+      "rate": 0.0
+    },
+    "user.name": {
+      "leaked": 6,
+      "total": 42,
+      "rate": 0.143
+    }
+  }
+}

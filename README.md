@@ -81,6 +81,20 @@ Private IPs stay private (10/8), public IPs map to the never-routed 198.18.0.0/1
 subnets and domain hierarchies stay consistent, and the mapping is kept in a local,
 encrypted vault so answers can be re-identified for display only.
 
+## Evaluation
+
+```bash
+uv run privasoc eval fetch                      # Elastic ground truth, 10 formats (not redistributed)
+uv run privasoc eval leak                       # pseudonymisation leakage, no LLM needed
+uv run privasoc eval run --runs 3 --modes structured,vrl --pseudo on,off
+uv run privasoc eval report                     # reports/eval.md + reports/eval.html
+```
+
+Each fixture is split in two: the model only ever sees the first half; parsers are scored
+field by field on the second half against Elastic's own pipeline output. Current numbers
+are in [reports/eval.md](reports/eval.md). Measured leakage went from 26.8 % (first regex
+detectors) to 8.1 % after the detectors were improved against these measurements.
+
 ## Privacy model
 
 | Guarantee | How |

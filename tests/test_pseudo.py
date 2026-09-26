@@ -115,3 +115,32 @@ def test_private_tlds_are_detected_but_paths_and_namespaces_are_not():
     assert ("fqdn", "media.jdoe.lab") in k
     assert detect("/etc/pihole/hosts/custom.list read") == []
     assert detect("System.Management.Automation loaded") == []
+
+
+@pytest.mark.parametrize(
+    "line,kind,value",
+    [
+        # regressions from the leakage evaluation on Elastic fixtures (I20)
+        ("May  5 17:51:17 dev01: %FTD-6-302013: Built", "host", "dev01"),
+        ("Oct 20 2019 15:15:15 dev01: %ASA-5-106100: acc", "host", "dev01"),
+        ("<134>1 2020-03-29T13:19:20Z gw-da58d3 CheckPoint 1930 - [x]", "host", "gw-da58d3"),
+        ("<166>CHI-ASAv-UG %ASA-6-315011: x", "host", "CHI-ASAv-UG"),
+        ("sshd[3402]: Accepted publickey for vagrant from 10.0.2.2 port 63673", "user", "vagrant"),
+        ("illegal user test from test.example.com", "user", "test"),
+        ("sudo:      tsg : user NOT in sudoers", "user", "tsg"),
+        ("icmp src srcif:192.168.1.2(LOCAL\\testgroup\\testuser) dst", "user", "testuser"),
+        ("Group <VPN5Policy> User <john> IP <192.168.5.1>", "user", "john"),
+        ('frank - frank [26/Dec/2016:16:22:13 +0000] "GET / HTTP/1.1"', "user", "frank"),
+        ('devname="use2-dmz-fw02" devid="FG"', "host", "use2-dmz-fw02"),
+        ('xauthuser="user1" group="N/A"', "user", "user1"),
+        ("GET http://www.goonernews.com/ badeyek", "fqdn", "www.goonernews.com"),
+        (
+            "to outside:2a02:cf40:add:4002:91f2:a9b2:e09a:6fc6/53",
+            "ipv6",
+            "2a02:cf40:add:4002:91f2:a9b2:e09a:6fc6",
+        ),
+        ("Connection from 172.16.0.1.", "ipv4", "172.16.0.1"),
+    ],
+)
+def test_vendor_format_regressions(line, kind, value):
+    assert (kind, value) in kinds(line), kinds(line)
