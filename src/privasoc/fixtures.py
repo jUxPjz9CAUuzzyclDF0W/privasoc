@@ -32,6 +32,18 @@ FIXTURES = {
 }
 
 
+# Held-out formats, added after development was frozen and never used to tune privasoc:
+# the dev set above was looked at while fixing failures (I26), so it is not a clean test.
+HOLDOUT = {
+    "sophos_xg": ("sophos", "xg", "test-sophos-18-5-firewall.log"),
+    "juniper_srx": ("juniper_srx", "log", "test-flow.log"),
+    "cisco_ios": ("cisco_ios", "log", "test-cisco-ios.log"),
+    "barracuda_waf": ("barracuda", "waf", "test-access.log"),
+}
+ALL = {**FIXTURES, **HOLDOUT}
+SETS = {"dev": list(FIXTURES), "holdout": list(HOLDOUT), "all": list(ALL)}
+
+
 @dataclass
 class Fixture:
     name: str
@@ -43,12 +55,14 @@ def fetch(dest: Path, names: list[str] | None = None) -> list[str]:
     """Download fixtures (expected ECS documents) into dest/<name>.json."""
     dest.mkdir(parents=True, exist_ok=True)
     done = []
-    for name in names or list(FIXTURES):
-        pkg, ds, test = FIXTURES[name]
+    for name in names or list(ALL):
+        pkg, ds, test = ALL[name]
         url = f"{BASE}/{pkg}/data_stream/{ds}/_dev/test/pipeline/{test}-expected.json"
         r = httpx.get(url, timeout=60, follow_redirects=True)
         r.raise_for_status()
         docs = [d for d in r.json()["expected"] if d and (d.get("event") or {}).get("original")]
+        if not docs:
+            continue  # no event.original to align lines with expectations
         (dest / f"{name}.json").write_text(
             json.dumps({"source": url, "sha": ELASTIC_SHA, "expected": docs}), encoding="utf-8"
         )

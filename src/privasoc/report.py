@@ -11,16 +11,23 @@ CONFIG = ("mode", "provider", "model", "pseudo")
 
 
 def _cfg_name(c: tuple) -> str:
-    mode, provider, model, pseudo = c
-    return f"{model} ({provider}) · {mode} · pseudo {'on' if pseudo else 'off'}"
+    mode, provider, model, pseudo, fset = c
+    return f"{model} ({provider}) · {mode} · pseudo {'on' if pseudo else 'off'} · {fset}"
+
+
+def _set(fixture: str) -> str:
+    from privasoc.fixtures import HOLDOUT
+
+    return "holdout" if fixture in HOLDOUT else "dev"
 
 
 def summarise(results: list[dict]) -> dict:
     by_cfg: dict[tuple, list[dict]] = defaultdict(list)
     for r in results:
-        by_cfg[tuple(r[k] for k in CONFIG)].append(r)
+        by_cfg[(*(r[k] for k in CONFIG), _set(r["fixture"]))].append(r)
     configs = []
-    for cfg, rs in sorted(by_cfg.items(), key=lambda kv: str(kv[0])):
+    order = lambda kv: (kv[0][4] != "dev", kv[0][1] == "reference", kv[0][0], not kv[0][3])  # noqa: E731
+    for cfg, rs in sorted(by_cfg.items(), key=order):
         ok = [r for r in rs if r["status"] == "proposed"]
         per_fx: dict[str, list[dict]] = defaultdict(list)
         for r in rs:

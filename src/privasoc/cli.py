@@ -349,6 +349,7 @@ def eval_run(
     providers: Annotated[str, typer.Option(help="Comma-separated: local,remote")] = "local",
     pseudo: Annotated[str, typer.Option(help="Comma-separated: on,off (off: local only)")] = "on",
     only: Annotated[str | None, typer.Option(help="Comma-separated fixture names")] = None,
+    fixture_set: Annotated[str, typer.Option("--set", help="dev, holdout or all")] = "dev",
     results: Path = Path("data/eval/results.jsonl"),
     budget: Annotated[
         float | None, typer.Option(help="Stop starting new runs after this many seconds")
@@ -363,7 +364,7 @@ def eval_run(
     from privasoc.sandbox import Sandbox
 
     s = get_settings()
-    fxs = fixtures.load(_fixture_dir(s), only.split(",") if only else None)
+    fxs = fixtures.load(_fixture_dir(s), only.split(",") if only else fixtures.SETS[fixture_set])
     sandbox = Sandbox(s.vector_bin)
     typer.echo(f"sandbox: {sandbox.check()}")
     done = {

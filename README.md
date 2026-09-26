@@ -91,9 +91,24 @@ uv run privasoc eval report                     # reports/eval.md + reports/eval
 ```
 
 Each fixture is split in two: the model only ever sees the first half; parsers are scored
-field by field on the second half against Elastic's own pipeline output. Current numbers
-are in [reports/eval.md](reports/eval.md). Measured leakage went from 26.8 % (first regex
-detectors) to 8.1 % after the detectors were improved against these measurements.
+field by field on the second half against Elastic's own pipeline output. Full numbers:
+[reports/eval.md](reports/eval.md).
+
+Results with `qwen3:8b` (Q4, 8 GB consumer GPU, 3 runs per format):
+
+| | parsers proposed (pass@1 / pass@3) | field F1 when proposed | invented values |
+|---|---|---|---|
+| free-form VRL | 0 % / 0 % | n/a | n/a |
+| **structured spec** (dev, 10 formats) | **70 % / 80 %** | **0.53** | **0** |
+| structured, pseudonymisation off | 70 % / 70 % | 0.57 | 0 |
+| structured (holdout, 4 unseen formats) | 67 % / 75 % | 0.21 | 0 |
+| hand-written reference spec | 100 % | 0.87 | 0 |
+
+What it says: a small local model cannot write code in a niche language, but it can fill a
+structured spec that privasoc validates, repairs and compiles; pseudonymisation costs
+little quality; and field mapping on unseen formats is where the remaining gap is.
+Pseudonymisation leakage went from 26.8 % (first regex detectors) to 8.1 % after the
+detectors were improved against these measurements.
 
 ## Privacy model
 
