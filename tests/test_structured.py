@@ -97,3 +97,28 @@ def test_compiled_spec_loads_in_vector(tmp_path):
     vrl = structured.compile_vrl(structured.load(PIHOLE_V6))
     vectorgen.write([{"id": "s1", "source": "pihole", "vrl": vrl}], tmp_path)
     assert vectorgen.validate(VECTOR, tmp_path) is None
+
+
+def test_feedback_on_the_mistakes_seen_with_qwen3_8b():
+    """Regression: the first real structured attempt (unnamed ts group, a constant written
+    as a group, non-ECS field names, invalid categorisation values)."""
+    spec = r"""
+prefix: '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (?P<rest>.*)$'
+body: rest
+timestamp: {group: ts, format: '%Y-%m-%d %H:%M:%S%.3f'}
+constants: {event.kind: event, event.category: [dns]}
+fields: {domain: rest}
+shapes:
+  - regex: '^cached (?P<domain>\S+) is <CNAME>'
+    fields: {dns.question.name: domain, dns.question.type: CNAME}
+    constants: {event.outcome: stale}
+"""
+    with pytest.raises(structured.SpecError) as e:
+        structured.load(spec)
+    text = "\n".join(e.value.problems)
+    assert "unnamed group" in text
+    assert "(?P<ts>...)" in text
+    assert "move it to `constants`" in text
+    assert "`domain` is not an ECS field" in text
+    assert "`event.category` cannot be ['dns']" in text
+    assert "`event.outcome` cannot be ['stale']" in text

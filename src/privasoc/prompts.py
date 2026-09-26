@@ -87,6 +87,9 @@ shapes:                                    # one entry per line shape, tried in 
     constants: {<ecs.field>: <value>}
 
 Rules
+- The prefix captures ONLY what every line starts with (usually the timestamp, maybe a
+  host and process) plus the rest of the line in one group used as `body`. Everything
+  that differs between lines belongs in the shapes. Name every group you use.
 - Every sample line must match the prefix and at least one shape. Look at the templates:
   one shape per template family. A last catch-all shape like '^(?P<text>.*)$' is allowed.
 - Regexes are Rust regex: no lookahead/lookbehind, no backreferences.

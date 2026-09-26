@@ -74,6 +74,19 @@ def _regex(src, where: str, problems: list[str]) -> re.Pattern | None:
         return None
 
 
+def _ecs_problem(ecs: str) -> str | None:
+    from privasoc.ecs import TOP_LEVEL
+
+    if not _ECS_PATH.match(ecs):
+        return f"`{ecs}` is not a valid ECS field path"
+    if ecs.split(".")[0] not in TOP_LEVEL:
+        return (
+            f"`{ecs}` is not an ECS field (ECS fields look like source.ip, "
+            "dns.question.name, event.action)"
+        )
+    return None
+
+
 def _mapping(obj, where: str, groups: set[str], problems: list[str]) -> dict[str, str]:
     if obj is None:
         return {}
@@ -82,16 +95,41 @@ def _mapping(obj, where: str, groups: set[str], problems: list[str]) -> dict[str
         return {}
     out = {}
     for ecs, group in obj.items():
-        if not _ECS_PATH.match(str(ecs)):
-            problems.append(f"{where}: `{ecs}` is not a valid ECS field path")
+        bad = _ecs_problem(str(ecs))
+        if bad:
+            problems.append(f"{where}: {bad}")
         elif str(group) not in groups:
             problems.append(
-                f"{where}: `{ecs}` uses group `{group}`, which the regex does "
-                f"not define (groups: {sorted(groups) or 'none'})"
+                f"{where}: `{ecs}: {group}` but `{group}` is not a named group of this regex "
+                f"(its groups: {sorted(groups) or 'none'}). If `{group}` is a fixed value, "
+                f"move it to `constants`; otherwise add (?P<{group}>...) to the regex."
             )
         else:
             out[str(ecs)] = str(group)
     return out
+
+
+def _constants(obj, where: str, problems: list[str]) -> dict:
+    from privasoc.ecs import ALLOWED
+
+    if not isinstance(obj, dict):
+        problems.append(f"{where}: must be a mapping `ecs.field: value`")
+        return {}
+    for ecs, value in obj.items():
+        bad = _ecs_problem(str(ecs))
+        if bad:
+            problems.append(f"{where}: {bad}")
+        elif str(ecs) in ALLOWED:
+            values = value if isinstance(value, list) else [value]
+            wrong = [v for v in values if v not in ALLOWED[str(ecs)]]
+            if wrong:
+                problems.append(
+                    f"{where}: `{ecs}` cannot be {wrong}; allowed: {sorted(ALLOWED[str(ecs)])}"
+                )
+    return obj
+
+
+_UNNAMED = re.compile(r"(?<!\\)\((?!\?)")
 
 
 def load(text: str) -> Spec:
@@ -109,19 +147,25 @@ def load(text: str) -> Spec:
     body = raw.get("body")
     if body is not None and str(body) not in pgroups:
         problems.append(f"body: `{body}` is not a group of prefix")
+    if prefix is not None and _UNNAMED.search(prefix.pattern):
+        problems.append(
+            "prefix: has an unnamed group `( ... )`; name it, e.g. (?P<ts>...), "
+            "or make it non-capturing with (?: ... )"
+        )
     ts = raw.get("timestamp")
-    if ts is not None and (
-        not isinstance(ts, dict)
-        or str(ts.get("group")) not in pgroups
-        or not isinstance(ts.get("format"), str)
-    ):
-        problems.append("timestamp: needs {group: <prefix group>, format: '<strftime>'}")
-        ts = None
+    if ts is not None:
+        if not isinstance(ts, dict) or not isinstance(ts.get("format"), str):
+            problems.append("timestamp: needs {group: <prefix group>, format: '<strftime>'}")
+            ts = None
+        elif str(ts.get("group")) not in pgroups:
+            problems.append(
+                f"timestamp: group `{ts.get('group')}` is not a named group of prefix "
+                f"(prefix groups: {sorted(pgroups) or 'none'}); name the date part of the "
+                f"prefix (?P<{ts.get('group')}>...)"
+            )
+            ts = None
     fields = _mapping(raw.get("fields"), "fields", pgroups, problems)
-    constants = raw.get("constants") or {}
-    if not isinstance(constants, dict):
-        problems.append("constants: must be a mapping")
-        constants = {}
+    constants = _constants(raw.get("constants") or {}, "constants", problems)
     shapes = []
     raw_shapes = raw.get("shapes") or []
     if not isinstance(raw_shapes, list) or not raw_shapes:
@@ -135,7 +179,7 @@ def load(text: str) -> Spec:
         rx = _regex(sh.get("regex"), f"{where}.regex", problems)
         if rx is None:
             continue
-        sconst = sh.get("constants") or {}
+        sconst = _constants(sh.get("constants") or {}, f"{where}.constants", problems)
         shapes.append(
             Shape(
                 str(sh.get("name", f"shape{i}")),
