@@ -88,7 +88,11 @@ def _ecs_problem(ecs: str) -> str | None:
     return None
 
 
-def _mapping(obj, where: str, groups: set[str], problems: list[str]) -> dict[str, str]:
+def _mapping(
+    obj, where: str, groups: set[str], problems: list[str], repairs: list[str]
+) -> dict[str, str]:
+    """Mappings that cannot work (non-ECS field, group the regex does not define) are
+    dropped and reported: dropping a mapping can lose data but never invent any."""
     if obj is None:
         return {}
     if not isinstance(obj, dict):
@@ -98,16 +102,140 @@ def _mapping(obj, where: str, groups: set[str], problems: list[str]) -> dict[str
     for ecs, group in obj.items():
         bad = _ecs_problem(str(ecs))
         if bad:
-            problems.append(f"{where}: {bad}")
+            repairs.append(f"{where}: dropped `{ecs}` ({bad})")
         elif str(group) not in groups:
-            problems.append(
-                f"{where}: `{ecs}: {group}` but `{group}` is not a named group of this regex "
-                f"(its groups: {sorted(groups) or 'none'}). If `{group}` is a fixed value, "
-                f"move it to `constants`; otherwise add (?P<{group}>...) to the regex."
+            repairs.append(
+                f"{where}: dropped `{ecs}: {group}` because `{group}` is not a named group "
+                f"of this regex (its groups: {sorted(groups) or 'none'})"
             )
         else:
             out[str(ecs)] = str(group)
     return out
+
+
+def _scan_groups(pattern: str):
+    """Yield (index, kind) for each '(' outside escapes and character classes, where kind is
+    'capture' for a plain '(' and 'other' for '(?...'; and (index, ')') for closers."""
+    i, in_class = 0, False
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\":
+            i += 2
+            continue
+        if in_class:
+            in_class = c != "]"
+        elif c == "[":
+            in_class = True
+        elif c == "(":
+            yield i, "other" if pattern.startswith("(?", i) else "capture"
+        elif c == ")":
+            yield i, ")"
+        i += 1
+
+
+def _name_unnamed(pattern: str) -> tuple[str, int]:
+    out, last, n = [], 0, 0
+    for i, kind in _scan_groups(pattern):
+        if kind == "capture":
+            n += 1
+            out += [pattern[last:i], f"(?P<g{n}>"]
+            last = i + 1
+    out.append(pattern[last:])
+    return "".join(out), n
+
+
+def _group_end(pattern: str, name: str) -> int | None:
+    start = pattern.find(f"(?P<{name}>")
+    if start < 0:
+        return None
+    depth = 0
+    for i, kind in _scan_groups(pattern):
+        if i < start:
+            continue
+        depth += -1 if kind == ")" else 1
+        if depth == 0:
+            return i
+    return None
+
+
+def _py_format(fmt: str) -> str:
+    for chrono in ("%.3f", "%.6f", "%.9f", "%.f"):
+        fmt = fmt.replace(chrono, ".%f")
+    return fmt.replace("%3f", "%f").replace("%6f", "%f")
+
+
+def _ts_parses(value: str, fmt: str) -> bool:
+    from datetime import datetime
+
+    try:
+        if fmt == "%s":
+            return value.isdigit()
+        py = _py_format(fmt)
+        if "%Y" not in py and "%y" not in py:
+            value, py = "2000 " + value, "%Y " + py
+        datetime.strptime(value, py)  # noqa: DTZ007 - only a shape check
+        return True
+    except ValueError:
+        return False
+
+
+def autorepair(raw: dict, lines: list[str]) -> list[str]:
+    """Deterministic, value-free fixes for the prefix mistakes small models keep repeating
+    (seen on real runs): unnamed groups, a timestamp group under another name, and a prefix
+    that swallows what the shapes expect. Mutates `raw`; returns the repairs made."""
+    repairs: list[str] = []
+    pattern = raw.get("prefix")
+    if not isinstance(pattern, str) or not lines:
+        return repairs
+    named, n = _name_unnamed(pattern)
+    if n:
+        pattern = raw["prefix"] = named
+        repairs.append(f"prefix: named {n} unnamed group(s) g1..g{n}")
+    try:
+        prefix = re.compile(pattern)
+    except re.error:
+        return repairs
+    m0 = prefix.search(lines[0])
+    ts = raw.get("timestamp")
+    if m0 and isinstance(ts, dict) and isinstance(ts.get("format"), str):
+        if str(ts.get("group")) not in prefix.groupindex:
+            for g in sorted(prefix.groupindex, key=prefix.groupindex.get):
+                if m0.group(g) and _ts_parses(m0.group(g), ts["format"]):
+                    repairs.append(f"timestamp: used prefix group `{g}` (it holds the date)")
+                    ts["group"] = g
+                    break
+    shapes = []
+    for sh in raw.get("shapes") or []:
+        if isinstance(sh, dict) and isinstance(sh.get("regex"), str):
+            try:
+                shapes.append(re.compile(sh["regex"]))
+            except re.error:
+                pass
+    tsg = ts.get("group") if isinstance(ts, dict) else None
+    if not shapes or tsg not in prefix.groupindex:
+        return repairs
+
+    def rate(get_text) -> float:
+        hits = 0
+        for line in lines:
+            m = prefix.search(line)
+            text = get_text(line, m) if m else None
+            hits += bool(text is not None and any(s.search(text) for s in shapes))
+        return hits / len(lines)
+
+    body = raw.get("body")
+    as_is = rate(lambda line, m: (m.group(body) or "") if body in prefix.groupindex else line)
+    after_ts = rate(lambda line, m: line[m.end(tsg) :].lstrip())
+    end = _group_end(pattern, tsg)
+    if after_ts > as_is and end is not None:
+        head = pattern[: end + 1]
+        raw["prefix"] = (head if head.startswith("^") else "^" + head) + r"\s+(?P<rest>.*)$"
+        raw["body"] = "rest"
+        repairs.append(
+            f"prefix: kept only the timestamp and put the rest in `rest` (shapes matched "
+            f"{after_ts:.0%} of lines this way, {as_is:.0%} before)"
+        )
+    return repairs
 
 
 def _constants(obj, where: str, problems: list[str], repairs: list[str]) -> dict:
@@ -119,12 +247,21 @@ def _constants(obj, where: str, problems: list[str], repairs: list[str]) -> dict
     if not isinstance(obj, dict):
         problems.append(f"{where}: must be a mapping `ecs.field: value`")
         return {}
+    from privasoc.grounding import CONSTANT_FIELDS
+
     out = {}
     for ecs, value in obj.items():
         key = str(ecs)
         bad = _ecs_problem(key)
         if bad:
-            problems.append(f"{where}: {bad}")
+            repairs.append(f"{where}: dropped `{key}` ({bad})")
+            continue
+        if key not in CONSTANT_FIELDS and not key.startswith("observer."):
+            # A constant anywhere else is a value not read from the line: a hallucination.
+            repairs.append(
+                f"{where}: dropped constant `{key}: {value}` (only categorisation fields "
+                "may be constants; map it from a regex group if it is in the line)"
+            )
             continue
         if key in ALLOWED:
             values = value if isinstance(value, list) else [value]
@@ -145,7 +282,8 @@ def _constants(obj, where: str, problems: list[str], repairs: list[str]) -> dict
 _UNNAMED = re.compile(r"(?<!\\)\((?!\?)")
 
 
-def load(text: str) -> Spec:
+def load(text: str, lines: list[str] | None = None) -> Spec:
+    """Parse and validate a spec; with sample `lines`, apply deterministic repairs first."""
     try:
         raw = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -155,17 +293,14 @@ def load(text: str) -> Spec:
     if not isinstance(raw, dict):
         raise SpecError(["the spec must be a YAML mapping with `shapes`"])
     problems: list[str] = []
-    repairs: list[str] = []
+    repairs: list[str] = autorepair(raw, lines) if lines else []
     prefix = _regex(raw["prefix"], "prefix", problems) if raw.get("prefix") else None
     pgroups = set(prefix.groupindex) if prefix else set()
     body = raw.get("body")
     if body is not None and str(body) not in pgroups:
         problems.append(f"body: `{body}` is not a group of prefix")
     if prefix is not None and _UNNAMED.search(prefix.pattern):
-        problems.append(
-            "prefix: has an unnamed group `( ... )`; name it, e.g. (?P<ts>...), "
-            "or make it non-capturing with (?: ... )"
-        )
+        repairs.append("prefix: unnamed groups are ignored; name the groups you use")
     ts = raw.get("timestamp")
     if ts is not None:
         if not isinstance(ts, dict) or not isinstance(ts.get("format"), str):
@@ -178,7 +313,7 @@ def load(text: str) -> Spec:
                 f"prefix (?P<{ts.get('group')}>...)"
             )
             ts = None
-    fields = _mapping(raw.get("fields"), "fields", pgroups, problems)
+    fields = _mapping(raw.get("fields"), "fields", pgroups, problems, repairs)
     constants = _constants(raw.get("constants") or {}, "constants", problems, repairs)
     shapes = []
     raw_shapes = raw.get("shapes") or []
@@ -198,7 +333,9 @@ def load(text: str) -> Spec:
             Shape(
                 str(sh.get("name", f"shape{i}")),
                 rx,
-                _mapping(sh.get("fields"), f"{where}.fields", set(rx.groupindex), problems),
+                _mapping(
+                    sh.get("fields"), f"{where}.fields", set(rx.groupindex), problems, repairs
+                ),
                 sconst if isinstance(sconst, dict) else {},
             )
         )

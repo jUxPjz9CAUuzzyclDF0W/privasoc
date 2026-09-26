@@ -92,18 +92,33 @@ def _parse_answer(text: str) -> tuple[dict | None, str]:
     return None, "answer must contain STATUS, REASON and a ```vrl code block"
 
 
-def _compile_spec(spec_text: str, sample: list[str]) -> tuple[str | None, str | None, list[str]]:
-    """Structured mode: validate the model's spec in Python, then compile it to VRL."""
+def _compile_spec(
+    spec_text: str, sample: list[str]
+) -> tuple[str | None, str | None, list[str], list[int]]:
+    """Structured mode: repair + validate the model's spec, compile it to VRL.
+
+    Returns (vrl, error_class, details, covered line indices). A spec that loads but misses
+    some sample lines is still compiled, so it can be kept as a partial candidate."""
     from privasoc import structured
 
     try:
-        spec = structured.load(spec_text)
+        spec = structured.load(spec_text, sample)
     except structured.SpecError as exc:
-        return None, "spec", exc.problems
+        return None, "spec", exc.problems, []
     unmatched = structured.check_lines(spec, sample)
+    vrl = structured.compile_vrl(spec)
+    missed = {int(m.split()[1]) - 1 for m in unmatched}
+    covered = [i for i in range(len(sample)) if i not in missed]
     if unmatched:
-        return None, "spec", unmatched + spec.repairs
-    return structured.compile_vrl(spec), None, spec.repairs
+        return vrl, "spec", unmatched + spec.repairs, covered
+    return vrl, None, spec.repairs, covered
+
+
+def _line_coverage(spec_text: str, sample: list[str], lines: list[str]) -> float:
+    from privasoc import structured
+
+    spec = structured.load(spec_text, sample)
+    return 1 - len(structured.check_lines(spec, lines)) / max(1, len(lines))
 
 
 def _signature(err: str | None, details: list[str]) -> tuple:
@@ -162,6 +177,7 @@ def generate(
     examples: list[dict] | None = None,
     progress=None,
     mode: str = "structured",
+    min_coverage: float = 0.8,
 ) -> Outcome:
     idx, clusters = stratified_sample(raw_lines, k)
     raw_sample = [raw_lines[i] for i in idx]
@@ -182,13 +198,18 @@ def generate(
     ]
     previous_class = None
     total_latency = 0.0
+    best = None  # structured mode: best partial-coverage candidate
     say = progress or (lambda _msg: None)
     base = messages[:]
     say(f"sampled {len(sample)} lines covering {len(templates)} templates")
     for n in range(1, max_attempts + 1):
         say(f"attempt {n}/{max_attempts}: waiting for {ep.name} model {ep.model}...")
         try:
-            reply = llm.chat(messages, originals=originals, json_mode=False)
+            # Raise the temperature on retries so a small model does not resend the same answer.
+            temperature = min(0.2 + 0.2 * (n - 1), 0.8)
+            reply = llm.chat(
+                messages, originals=originals, json_mode=False, temperature=temperature
+            )
         except httpx.TimeoutException:
             say(f"attempt {n}: no answer within {llm.timeout:.0f}s")
             out.attempts.append(Attempt(n, "timeout", "timeout", [], llm.timeout))
@@ -217,7 +238,23 @@ def generate(
             spec_text = None
             if mode == "structured":
                 spec_text = vrl
-                vrl, err, details = _compile_spec(spec_text, sample)
+                vrl, err, details, covered = _compile_spec(spec_text, sample)
+                if err == "spec" and vrl and covered:
+                    # Partial candidate: must be fully valid on the lines it covers.
+                    sub = [sample[i] for i in covered]
+                    perr, _, pm = evaluate(sandbox, vrl, sub)
+                    # Coverage is measured on up to 500 REAL lines (local Python dry-run, never
+                    # sent anywhere): the stratified sample over-represents rare shapes.
+                    cov = _line_coverage(spec_text, sample, raw_lines[:500])
+                    if perr is None and (best is None or cov > best["coverage"]):
+                        best = {
+                            "coverage": cov,
+                            "vrl": vrl,
+                            "spec": spec_text,
+                            "n": n,
+                            "metrics": pm,
+                            "covered": covered,
+                        }
             repairs = details if mode == "structured" and err is None else []
             if mode != "structured" or err is None:
                 err, details, metrics = evaluate(sandbox, vrl, sample)
@@ -265,6 +302,15 @@ def generate(
         )
         out.vrl = out.attempts[-1].vrl if out.attempts else None
 
+    if out.status != "proposed" and best and best["coverage"] >= min_coverage:
+        # D44/I16: a parser covering most line shapes is proposed; the lines it does not
+        # match keep going to the quarantine, and the reviewer sees the coverage.
+        out.status, out.vrl = "proposed", best["vrl"]
+        out.reason = (
+            f"partial: covers {best['coverage']:.0%} of the source's lines "
+            f"(attempt {best['n']}); the rest stays in quarantine"
+        )
+        out.metrics = {**best["metrics"], "line_coverage": round(best["coverage"], 3)}
     out.metrics.update(
         {
             "attempts": len(out.attempts),
@@ -275,7 +321,9 @@ def generate(
     if out.status == "proposed":
         # Shape-preservation check: the parser was written on pseudonymised data; it must
         # also work on the real lines. This runs locally and is shown to the reviewer only.
-        err, details, m = evaluate(sandbox, out.vrl, raw_sample)
+        partial = "line_coverage" in out.metrics
+        check = [raw_sample[i] for i in best["covered"]] if partial else raw_sample
+        err, details, m = evaluate(sandbox, out.vrl, check)
         out.metrics["real_lines_ok"] = err is None
         res = sandbox.run(out.vrl, raw_lines[: min(len(raw_lines), 20)])
         out.metrics["coverage_recent"] = round(len(res.outputs) / max(1, len(res.lines)), 3)

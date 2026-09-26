@@ -172,6 +172,7 @@ def _run_generation(
         max_attempts=s.max_attempts,
         progress=lambda msg: typer.echo(f"  {msg}"),
         mode=mode,
+        min_coverage=s.min_coverage,
     )
 
 

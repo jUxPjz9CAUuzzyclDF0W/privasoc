@@ -15,6 +15,7 @@ CONSTANT_FIELDS = set(ALLOWED) | {
     "event.module",
     "event.dataset",
     "event.provider",
+    "event.action",  # chosen by the source/parser in ECS, like the categorisation fields
 }
 PROTO = {"6": "tcp", "17": "udp", "1": "icmp", "58": "ipv6-icmp"}
 _ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})")

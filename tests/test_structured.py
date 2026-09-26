@@ -41,7 +41,7 @@ def test_spec_errors_are_precise():
     with pytest.raises(structured.SpecError) as e:
         structured.load(bad)
     text = " ".join(e.value.problems)
-    assert "lookahead" in text and "`nope`" in text
+    assert "lookahead" in text
 
 
 def test_python_dry_run_reports_unmatched_lines():
@@ -99,28 +99,36 @@ def test_compiled_spec_loads_in_vector(tmp_path):
     assert vectorgen.validate(VECTOR, tmp_path) is None
 
 
-def test_feedback_on_the_mistakes_seen_with_qwen3_8b():
-    """Regression: the first real structured attempt (unnamed ts group, a constant written
-    as a group, non-ECS field names, invalid categorisation values)."""
-    spec = r"""
-prefix: '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (?P<rest>.*)$'
-body: rest
+def test_repairs_for_the_mistakes_seen_with_qwen3_8b():
+    """Regression: the model's real specs (unnamed date group, greedy prefix, a constant
+    written as a group, non-ECS field names, invented constants) are repaired, not rejected."""
+    spec_text = r"""
+prefix: '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (?P<type>\w+)(?P<extra> .*)?$'
+body: extra
 timestamp: {group: ts, format: '%Y-%m-%d %H:%M:%S%.3f'}
-constants: {event.kind: event, event.category: [dns]}
-fields: {domain: rest}
+constants: {event.kind: event, event.type: [dns], network.transport: udp}
+fields: {domain: extra, source.ip: src_ip}
 shapes:
-  - regex: '^cached (?P<domain>\S+) is <CNAME>'
-    fields: {dns.question.name: domain, dns.question.type: CNAME}
-    constants: {event.outcome: stale}
+  - regex: '^cached (?P<name>\S+) is <CNAME>'
+    fields: {dns.question.name: name, dns.question.type: CNAME}
+  - regex: '^reply (?P<name>\S+) is (?P<ip>\S+)'
+    fields: {dns.question.name: name}
 """
-    with pytest.raises(structured.SpecError) as e:
-        structured.load(spec)
-    text = "\n".join(e.value.problems)
-    assert "unnamed group" in text
-    assert "(?P<ts>...)" in text
-    assert "move it to `constants`" in text
-    assert "`domain` is not an ECS field" in text
-    # categorisation values are repaired rather than rejected (see next tests)
+    sample = lines()
+    spec = structured.load(spec_text, sample)
+    text = "\n".join(spec.repairs)
+    for expected in (
+        "named 1 unnamed group",
+        "used prefix group `g1`",
+        "kept only the timestamp",
+        "dropped `dns.question.type: CNAME`",
+        "`domain` is not an ECS field",
+        "dropped constant `network.transport: udp`",
+        "removed invalid `event.type`",
+    ):
+        assert expected in text, expected
+    assert spec.body == "rest"
+    assert not structured.check_lines(spec, [ln for ln in sample if " reply " in ln])
 
 
 def test_invalid_categorisation_values_are_repaired_and_reported():
@@ -142,3 +150,37 @@ def test_prefix_that_captures_too_much_gets_a_hint():
         spec, ["2026-09-26 14:43:33.885 reply a.example.com is 1.2.3.4"]
     )
     assert "prefix captures too much" in problems[0]
+
+
+@needs_vector
+def test_partial_spec_is_proposed_when_it_covers_most_lines(pz):
+    """A spec missing a rare shape is still useful: proposed with its coverage, the
+    unmatched lines keep going to quarantine. Below the threshold it is not proposed."""
+    no_forward = PIHOLE_V6.replace("  - name: forwarded", "  - name: fwd").replace(
+        "'^forwarded (?P<name>\\S+) to (?P<upstream>\\S+)$'", "'^never-matches$'"
+    )
+    answer = f"STATUS: ok\nREASON: r\n```yaml{no_forward}```"
+    out = generate(
+        "p",
+        lines(),
+        ScriptedLLM([answer, answer]),
+        pz,
+        Sandbox(VECTOR),
+        k=10,
+        mode="structured",
+        max_attempts=2,
+    )
+    assert out.status == "proposed" and out.reason.startswith("partial")
+    assert 0.8 <= out.metrics["line_coverage"] < 1 and out.metrics["real_lines_ok"]
+    out = generate(
+        "p",
+        lines(),
+        ScriptedLLM([answer, answer]),
+        pz,
+        Sandbox(VECTOR),
+        k=10,
+        mode="structured",
+        max_attempts=2,
+        min_coverage=0.95,
+    )
+    assert out.status == "needs_escalation"
