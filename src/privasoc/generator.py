@@ -116,6 +116,29 @@ def _compile_spec(
     return vrl, None, spec.repairs, covered
 
 
+def _real_coverage(spec_text, sample, raw_lines, pz, originals, metrics, repairs):
+    """Held-out check on up to 500 REAL lines of the source (local dry run). The sample can
+    miss a shape (e.g. `cached x is NODATA-IPv6`); unmatched lines are shown to the model,
+    pseudonymised first and added to the leak check."""
+    from privasoc import structured
+
+    spec = structured.load(spec_text, sample)
+    pool = raw_lines[:500]
+    missed = [ln for ln in pool if not structured.matches(spec, ln)]
+    metrics["line_coverage"] = round(1 - len(missed) / max(1, len(pool)), 3)
+    if not missed:
+        return None, repairs
+    idx, _ = stratified_sample(missed, 5)
+    shown = [pz.pseudonymize(missed[i]) for i in idx]
+    for p in shown:
+        originals.update(p.originals)
+    details = [
+        f"line of the same source matching no shape ({len(missed)} such lines): `{p.text}`"
+        for p in shown
+    ]
+    return "coverage", details + repairs
+
+
 def _line_coverage(spec_text: str, sample: list[str], lines: list[str]) -> float:
     from privasoc import structured
 
@@ -263,6 +286,19 @@ def generate(
                 details = details + repairs  # repairs are reported, never silent
                 metrics["auto_repairs"] = len(repairs)
                 out.metrics = metrics
+                if mode == "structured" and err is None:
+                    err, details = _real_coverage(
+                        spec_text, sample, raw_lines, pz, originals, metrics, repairs
+                    )
+                    if err and (best is None or metrics["line_coverage"] > best["coverage"]):
+                        best = {
+                            "coverage": metrics["line_coverage"],
+                            "vrl": vrl,
+                            "spec": spec_text,
+                            "n": n,
+                            "metrics": dict(metrics),
+                            "covered": list(range(len(sample))),
+                        }
         out.attempts.append(Attempt(n, status, err, details, reply.latency_s, vrl))
         if mode == "structured" and answer is not None:
             out.attempts[-1].spec = spec_text
@@ -281,6 +317,7 @@ def generate(
             "compile",
             "schema",
             "spec",
+            "coverage",
         }:
             # D38c: stagnation (same failure class repeatedly)
             out.status, out.reason = "needs_escalation", f"stagnation on {err} errors"
@@ -324,7 +361,7 @@ def generate(
     if out.status == "proposed":
         # Shape-preservation check: the parser was written on pseudonymised data; it must
         # also work on the real lines. This runs locally and is shown to the reviewer only.
-        partial = "line_coverage" in out.metrics
+        partial = out.reason.startswith("partial")
         check = [raw_sample[i] for i in best["covered"]] if partial else raw_sample
         err, details, m = evaluate(sandbox, out.vrl, check)
         out.metrics["real_lines_ok"] = err is None

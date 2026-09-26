@@ -351,6 +351,17 @@ def load(text: str, lines: list[str] | None = None) -> Spec:
     return Spec(prefix, str(body) if body else None, ts, constants, fields, shapes, repairs)
 
 
+def matches(spec: Spec, line: str) -> bool:
+    target = line
+    if spec.prefix:
+        m = spec.prefix.search(line)
+        if not m:
+            return False
+        if spec.body:
+            target = m.group(spec.body) or ""
+    return any(s.regex.search(target) for s in spec.shapes)
+
+
 def check_lines(spec: Spec, lines: list[str]) -> list[str]:
     """Python dry-run: which sample lines does the spec fail to match?"""
     problems = []

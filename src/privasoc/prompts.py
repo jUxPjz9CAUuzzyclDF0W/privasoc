@@ -102,9 +102,11 @@ Rules
 - Ports, pids and codes are converted to integers for you.
 
 Useful ECS fields: @timestamp, event.kind, event.category (list), event.type (list),
-event.outcome, event.action, source.ip, source.port, destination.ip, destination.port,
-network.transport, user.name, host.hostname, process.name, process.pid, dns.question.name,
-dns.question.type, dns.resolved_ip, observer.product, log.level, rule.name, url.original
+event.outcome, event.action, source.ip / source.port (who sends), destination.ip /
+destination.port (where traffic goes), network.transport, user.name, host.hostname,
+process.name, process.pid, dns.question.name (name looked up), dns.question.type (A, AAAA,
+HTTPS...), dns.resolved_ip (IP addresses in a DNS answer), observer.product, log.level,
+rule.name, url.original. Map every value you capture that has a matching field.
 
 Complete example (another format, for the structure only):
 lines:
@@ -182,6 +184,8 @@ def parser_feedback(error_class: str, details: list[str], program: str | None = 
         "ungrounded": "Some extracted values do not appear in the line (hallucinated).",
         "format": "Your answer did not follow the required format.",
         "spec": "Your spec does not work yet.",
+        "coverage": "Your spec works on the sample lines, but other lines of the same source "
+        "match no shape. Keep your shapes and add or widen shapes so these lines match too.",
     }[error_class]
     body = "\n".join(f"- {d}" for d in details[:12])
     import re

@@ -217,3 +217,28 @@ def test_non_ip_answers_never_reach_ip_fields():
     )
     assert "resolved_ip" not in res.lines[0].output["dns"]
     assert res.lines[1].output["dns"]["resolved_ip"] == "10.1.2.3"
+
+
+@needs_vector
+def test_held_out_real_lines_catch_a_shape_the_sample_missed(pz):
+    """Regression from a real run: 10/10 sample lines passed but `cached x is NODATA-IPv6`
+    (same Drain template as the sampled lines) was never matched."""
+    src = [
+        f"2026-09-26 14:00:{i:02d}.000 cached host{i}.example.com is 10.0.0.{i + 1}"
+        for i in range(20)
+    ] + ["2026-09-26 14:00:59.000 cached host9.example.com is NODATA-IPv6"]
+
+    def spec(ip_regex):
+        return (
+            "STATUS: ok\nREASON: r\n```yaml\n"
+            "prefix: '^(?P<ts>\\S+ \\S+) (?P<rest>.*)$'\nbody: rest\n"
+            f"shapes: [{{regex: '^cached (?P<name>\\S+) is (?P<ip>{ip_regex})$', "
+            "fields: {dns.question.name: name, dns.resolved_ip: ip}}]\n```"
+        )
+
+    llm = ScriptedLLM([spec("[0-9.]+"), spec("\\S+")])
+    out = generate("p", src, llm, pz, Sandbox(VECTOR), k=10, mode="structured")
+    assert [a.error_class for a in out.attempts] == ["coverage", None]
+    assert "NODATA-IPv6" in llm.sent[-1]  # the model was shown the missed line
+    assert "host9.example.com" not in llm.sent[-1]  # ... pseudonymised
+    assert out.status == "proposed" and out.metrics["line_coverage"] == 1.0
