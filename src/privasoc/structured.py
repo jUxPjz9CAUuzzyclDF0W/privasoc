@@ -182,6 +182,31 @@ def _ts_parses(value: str, fmt: str) -> bool:
         return False
 
 
+def adopt_header(raw: dict, lines: list[str], structure) -> list[str]:
+    """If the model's prefix matches fewer lines than the header privasoc detected, use the
+    detected one (value-free: only the regex and timestamp format change)."""
+    if structure is None or not structure.prefix or not lines:
+        return []
+
+    def rate(rx: str | None) -> float:
+        try:
+            c = re.compile(rx) if rx else None
+        except re.error:
+            return 0.0
+        return sum(bool(c and c.search(ln)) for ln in lines) / len(lines)
+
+    mine = raw.get("prefix") if isinstance(raw.get("prefix"), str) else None
+    if rate(mine) >= 0.9 or rate(structure.prefix) < 0.9:
+        return []
+    raw["prefix"], raw["body"] = structure.prefix, "rest"
+    if structure.timestamp_format:
+        raw["timestamp"] = {"group": "ts", "format": structure.timestamp_format}
+    return [
+        f"prefix: replaced by the detected {structure.header} header (yours matched "
+        f"{rate(mine):.0%} of the lines)"
+    ]
+
+
 def autorepair(raw: dict, lines: list[str]) -> list[str]:
     """Deterministic, value-free fixes for the prefix mistakes small models keep repeating
     (seen on real runs): unnamed groups, a timestamp group under another name, and a prefix
@@ -287,7 +312,7 @@ def _constants(obj, where: str, problems: list[str], repairs: list[str]) -> dict
 _UNNAMED = re.compile(r"(?<!\\)\((?!\?)")
 
 
-def load(text: str, lines: list[str] | None = None) -> Spec:
+def load(text: str, lines: list[str] | None = None, structure=None) -> Spec:
     """Parse and validate a spec; with sample `lines`, apply deterministic repairs first."""
     try:
         raw = yaml.safe_load(text)
@@ -298,7 +323,8 @@ def load(text: str, lines: list[str] | None = None) -> Spec:
     if not isinstance(raw, dict):
         raise SpecError(["the spec must be a YAML mapping with `shapes`"])
     problems: list[str] = []
-    repairs: list[str] = autorepair(raw, lines) if lines else []
+    repairs: list[str] = adopt_header(raw, lines or [], structure)
+    repairs += autorepair(raw, lines) if lines else []
     prefix = _regex(raw["prefix"], "prefix", problems) if raw.get("prefix") else None
     pgroups = set(prefix.groupindex) if prefix else set()
     body = raw.get("body")

@@ -95,7 +95,7 @@ def _parse_answer(text: str) -> tuple[dict | None, str]:
 
 
 def _compile_spec(
-    spec_text: str, sample: list[str]
+    spec_text: str, sample: list[str], structure=None
 ) -> tuple[str | None, str | None, list[str], list[int]]:
     """Structured mode: repair + validate the model's spec, compile it to VRL.
 
@@ -104,7 +104,7 @@ def _compile_spec(
     from privasoc import structured
 
     try:
-        spec = structured.load(spec_text, sample)
+        spec = structured.load(spec_text, sample, structure)
     except structured.SpecError as exc:
         return None, "spec", exc.problems, []
     unmatched = structured.check_lines(spec, sample)
@@ -138,13 +138,13 @@ def _guarded(originals: set[str]) -> set[str]:
     return {o for o in originals if o.lower() not in _VOCAB}
 
 
-def _real_coverage(spec_text, sample, raw_lines, pz, originals, metrics, repairs):
+def _real_coverage(spec_text, sample, raw_lines, pz, originals, metrics, repairs, structure=None):
     """Held-out check on up to 500 REAL lines of the source (local dry run). The sample can
     miss a shape (e.g. `cached x is NODATA-IPv6`); unmatched lines are shown to the model,
     pseudonymised first and added to the leak check."""
     from privasoc import structured
 
-    spec = structured.load(spec_text, sample)
+    spec = structured.load(spec_text, sample, structure)
     pool = raw_lines[:500]
     missed = [ln for ln in pool if not structured.matches(spec, ln)]
     metrics["line_coverage"] = round(1 - len(missed) / max(1, len(pool)), 3)
@@ -161,10 +161,10 @@ def _real_coverage(spec_text, sample, raw_lines, pz, originals, metrics, repairs
     return "coverage", details + repairs
 
 
-def _line_coverage(spec_text: str, sample: list[str], lines: list[str]) -> float:
+def _line_coverage(spec_text: str, sample: list[str], lines: list[str], structure=None) -> float:
     from privasoc import structured
 
-    spec = structured.load(spec_text, sample)
+    spec = structured.load(spec_text, sample, structure)
     return 1 - len(structured.check_lines(spec, lines)) / max(1, len(lines))
 
 
@@ -237,6 +237,10 @@ def generate(
     # Templates are computed on pseudonymised lines so they never carry originals.
     _, pclusters = stratified_sample(sample, len(sample))
     templates = [c.template for c in pclusters]
+    # I23: deterministic structure detection on the pseudonymised sample.
+    from privasoc import analyze
+
+    structure = analyze.detect(sample)
 
     ep = llm.endpoint
     out = Outcome(
@@ -244,7 +248,17 @@ def generate(
     )
     messages = [
         {"role": "system", "content": prompts.system_for(mode)},
-        {"role": "user", "content": prompts.parser_user(source, sample, templates, examples, mode)},
+        {
+            "role": "user",
+            "content": prompts.parser_user(
+                source,
+                sample,
+                templates,
+                examples,
+                mode,
+                structure.describe() if mode == "structured" else "",
+            ),
+        },
     ]
     previous_class = None
     total_latency = 0.0
@@ -295,14 +309,14 @@ def generate(
             spec_text = None
             if mode == "structured":
                 spec_text = vrl
-                vrl, err, details, covered = _compile_spec(spec_text, sample)
+                vrl, err, details, covered = _compile_spec(spec_text, sample, structure)
                 if err == "spec" and vrl and covered:
                     # Partial candidate: must be fully valid on the lines it covers.
                     sub = [sample[i] for i in covered]
                     perr, _, pm = evaluate(sandbox, vrl, sub)
                     # Coverage is measured on up to 500 REAL lines (local Python dry-run, never
                     # sent anywhere): the stratified sample over-represents rare shapes.
-                    cov = _line_coverage(spec_text, sample, raw_lines[:500])
+                    cov = _line_coverage(spec_text, sample, raw_lines[:500], structure)
                     if perr is None and (best is None or cov > best["coverage"]):
                         best = {
                             "coverage": cov,
@@ -320,7 +334,7 @@ def generate(
                 out.metrics = metrics
                 if mode == "structured" and err is None:
                     err, details = _real_coverage(
-                        spec_text, sample, raw_lines, pz, originals, metrics, repairs
+                        spec_text, sample, raw_lines, pz, originals, metrics, repairs, structure
                     )
                     if err and (best is None or metrics["line_coverage"] > best["coverage"]):
                         best = {

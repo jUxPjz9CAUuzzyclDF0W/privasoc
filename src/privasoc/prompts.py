@@ -167,6 +167,7 @@ def parser_user(
     templates: list[str],
     examples: list[dict] | None = None,
     mode: str = "vrl",
+    structure: str = "",
 ) -> str:
     parts = [f"Source: {source}", "", "Line templates found (Drain, <*> = variable):"]
     parts += [f"- {t}" for t in templates[:15]]
@@ -174,6 +175,8 @@ def parser_user(
         parts += ["", "Approved parsers for similar formats (for reference):"]
         for ex in examples:
             parts += [f"# sample: {ex['sample']}", ex["vrl"], ""]
+    if structure:
+        parts += ["", structure]
     parts += ["", "Sample lines:"]
     parts += [f"{i + 1}. {s}" for i, s in enumerate(samples)]
     parts += ["", "Write the YAML spec." if mode == "structured" else "Write the VRL program."]
