@@ -80,6 +80,10 @@ body: <name of the prefix group holding the rest of the line>
 timestamp: {group: <prefix group>, format: '<strftime format>'}
 constants: {<ecs.field>: <value>}          # same for every line
 fields: {<ecs.field>: <prefix group>}      # prefix groups -> ECS
+kv:                                        # for key=value lines (instead of or with shapes)
+  field_delimiter: ' '                     # between pairs, e.g. ' ' or '; '
+  value_delimiter: '='                     # between key and value, e.g. '=' or ':'
+  fields: {<ecs.field>: <key name in the line>}
 shapes:                                    # one entry per line shape, tried in order
   - name: <short name>
     regex: '<regex with named groups, matched against body>'
@@ -129,6 +133,19 @@ shapes:
     regex: '^Disconnected from (?P<ip>\S+) port (?P<port>\d+)'
     fields: {source.ip: ip, source.port: port}
     constants: {event.category: [session], event.type: [end]}
+```
+
+Key=value example (use `kv` when lines are lists of pairs; quotes are removed for you):
+line: Jan 3 13:45:36 fw01 id=firewall src=10.1.2.3:3670 dst=10.9.9.9 proto=tcp/443 usr="user-1a2b3c"
+```yaml
+prefix: '^(?P<ts>\w{3} +\d+ [\d:]+) (?P<host>\S+) (?P<rest>.*)$'
+body: rest
+timestamp: {group: ts, format: '%b %d %H:%M:%S'}
+fields: {host.hostname: host}
+kv:
+  field_delimiter: ' '
+  value_delimiter: '='
+  fields: {destination.ip: dst, user.name: usr}
 ```
 
 Answer in exactly this format, nothing else:

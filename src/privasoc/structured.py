@@ -60,6 +60,7 @@ class Spec:
     fields: dict[str, str]
     shapes: list[Shape]
     repairs: list[str] = field(default_factory=list)
+    kv: dict | None = None  # {field_delimiter, value_delimiter, fields: {ecs: key}}
 
 
 def _regex(src, where: str, problems: list[str]) -> re.Pattern | None:
@@ -320,9 +321,29 @@ def load(text: str, lines: list[str] | None = None) -> Spec:
     fields = _mapping(raw.get("fields"), "fields", pgroups, problems, repairs)
     constants = _constants(raw.get("constants") or {}, "constants", problems, repairs)
     shapes = []
+    kv = None
+    raw_kv = raw.get("kv")
+    if raw_kv is not None:
+        if not isinstance(raw_kv, dict):
+            problems.append("kv: must be {field_delimiter, value_delimiter, fields}")
+        else:
+            kv_fields = {}
+            for ecs, key in (raw_kv.get("fields") or {}).items():
+                bad = _ecs_problem(str(ecs))
+                if bad:
+                    repairs.append(f"kv.fields: dropped `{ecs}` ({bad})")
+                else:
+                    kv_fields[str(ecs)] = str(key)
+            kv = {
+                "field_delimiter": str(raw_kv.get("field_delimiter", " ")),
+                "value_delimiter": str(raw_kv.get("value_delimiter", "=")),
+                "fields": kv_fields,
+            }
+            if not kv_fields:
+                problems.append("kv.fields: map at least one key to an ECS field")
     raw_shapes = raw.get("shapes") or []
-    if not isinstance(raw_shapes, list) or not raw_shapes:
-        problems.append("shapes: give at least one shape")
+    if not isinstance(raw_shapes, list) or (not raw_shapes and kv is None):
+        problems.append("shapes: give at least one shape (or a kv section)")
         raw_shapes = []
     for i, sh in enumerate(raw_shapes):
         where = f"shapes[{i}]"
@@ -348,7 +369,7 @@ def load(text: str, lines: list[str] | None = None) -> Spec:
             problems.append(f"group name `{g}` must be an identifier")
     if problems:
         raise SpecError(problems)
-    return Spec(prefix, str(body) if body else None, ts, constants, fields, shapes, repairs)
+    return Spec(prefix, str(body) if body else None, ts, constants, fields, shapes, repairs, kv)
 
 
 def matches(spec: Spec, line: str) -> bool:
@@ -359,7 +380,7 @@ def matches(spec: Spec, line: str) -> bool:
             return False
         if spec.body:
             target = m.group(spec.body) or ""
-    return any(s.regex.search(target) for s in spec.shapes)
+    return spec.kv is not None or any(s.regex.search(target) for s in spec.shapes)
 
 
 def check_lines(spec: Spec, lines: list[str]) -> list[str]:
@@ -374,7 +395,7 @@ def check_lines(spec: Spec, lines: list[str]) -> list[str]:
                 continue
             if spec.body:
                 target = m.group(spec.body) or ""
-        if not any(s.regex.search(target) for s in spec.shapes):
+        if spec.kv is None and not any(s.regex.search(target) for s in spec.shapes):
             msg = f"line {i} `{line[:200]}`: no shape matches `{target[:160]}`"
             if spec.prefix and spec.prefix.groups:
                 # Would a shape match if the prefix kept only its first group (the date)?
@@ -400,22 +421,22 @@ def _raw_regex(rx: re.Pattern) -> str:
     return "r'" + rx.pattern.replace("'", r"\x27") + "'"
 
 
-def _assign(var: str, ecs: str, group: str) -> list[str]:
-    v = f"{var}.{group}"
+def _assign(var: str, ecs: str, group: str, expr: str | None = None) -> list[str]:
+    """Assign `var.group` (or any `expr`) to an ECS field, with type-specific guards."""
+    safe = re.sub(r"\W", "_", group)
+    tmp = f"v_{var}_{safe}"
+    src = expr or f"{var}.{group}"
+    # The `if true` gives the value type string|null whatever the source (a prefix group
+    # is a plain string), so fallible conversions with `??` type-check in every case.
+    lines = [f"{tmp} = if true {{ {src} }} else {{ null }}"]
     if ecs.endswith(INT_SUFFIXES):
-        return [f"if {v} != null {{ .{ecs} = to_int({v}) ?? null }}"]
+        return lines + [f"if {tmp} != null {{ .{ecs} = to_int({tmp}) ?? null }}"]
     if ecs in IP_FIELDS:
         # Only real IPs reach an IP field (Pi-hole answers "NODATA-IPv6", "<CNAME>"...).
-        # The `if true` makes the type string|null whatever the source (a prefix group is
-        # a plain string), so `string(x) ?? ""` type-checks in every case.
-        tmp = f"ip_{var}_{group}"
         s = f'(string({tmp}) ?? "")'
-        return [
-            f"{tmp} = if true {{ {v} }} else {{ null }}",
-            f"if is_ipv4{s} || is_ipv6{s} {{ .{ecs} = {tmp} }}",
-        ]
+        return lines + [f"if is_ipv4{s} || is_ipv6{s} {{ .{ecs} = {tmp} }}"]
     # "-" is the usual "no value" placeholder (web logs, CLF, many firewalls)
-    return [f'if {v} != null && {v} != "" && {v} != "-" {{ .{ecs} = {v} }}']
+    return lines + [f'if {tmp} != null && {tmp} != "" && {tmp} != "-" {{ .{ecs} = {tmp} }}']
 
 
 def compile_vrl(spec: Spec) -> str:
@@ -452,7 +473,16 @@ def compile_vrl(spec: Spec) -> str:
         out += [f"{indent}  {ln}" for ln in (body or ["null"])]
         out.append(f"{indent}}} else {{")
         indent += "  "
-    out.append(f"{indent}abort")
+    if spec.kv:
+        kv = spec.kv
+        out.append(
+            f"kv = parse_key_value(t, key_value_delimiter: {_lit(kv['value_delimiter'])}, "
+            f"field_delimiter: {_lit(kv['field_delimiter'])}) ?? {{}}"
+        )
+        for i, (ecs, key) in enumerate(kv["fields"].items()):
+            out += _assign("kv", ecs, f"k{i}", expr=f"get(kv, [{_lit(key)}]) ?? null")
+    # With a kv section every line is handled; otherwise an unknown shape aborts.
+    out.append(f"{indent}{'null' if spec.kv else 'abort'}")
     for _ in spec.shapes:
         indent = indent[:-2]
         out.append(f"{indent}}}")

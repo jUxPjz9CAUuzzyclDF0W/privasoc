@@ -349,8 +349,14 @@ def eval_run(
     pseudo: Annotated[str, typer.Option(help="Comma-separated: on,off (off: local only)")] = "on",
     only: Annotated[str | None, typer.Option(help="Comma-separated fixture names")] = None,
     results: Path = Path("data/eval/results.jsonl"),
+    budget: Annotated[
+        float | None, typer.Option(help="Stop starting new runs after this many seconds")
+    ] = None,
 ) -> None:
     """Run the parser-generation evaluation; resumes from existing results."""
+    import time
+
+    started = time.monotonic()
     from privasoc import evaluation, fixtures
     from privasoc.llm import LLMClient
     from privasoc.sandbox import Sandbox
@@ -388,6 +394,9 @@ def eval_run(
                         key = (fx.name, mode, ep.name, ep.model, p == "on", run)
                         if key in done:
                             continue
+                        if budget is not None and time.monotonic() - started > budget:
+                            typer.echo("budget reached; rerun the same command to resume")
+                            return
                         r = evaluation.run_one(
                             fx,
                             run,

@@ -13,7 +13,7 @@ import httpx
 from privasoc import prompts
 from privasoc.ecs import validate
 from privasoc.grounding import ungrounded
-from privasoc.llm import LLMClient
+from privasoc.llm import LeakError, LLMClient
 from privasoc.pseudo import Pseudonymizer
 from privasoc.sampling import stratified_sample
 from privasoc.sandbox import Sandbox
@@ -114,6 +114,28 @@ def _compile_spec(
     if unmatched:
         return vrl, "spec", unmatched + spec.repairs, covered
     return vrl, None, spec.repairs, covered
+
+
+_VOCAB: set[str] | None = None
+
+
+def _guarded(originals: set[str]) -> set[str]:
+    """Originals the leak guard must look for. Values that are also words of our own fixed
+    texts (prompts, ECS enumerations: a user called `admin` vs the event.type `admin`) are
+    left out: in data they are already replaced everywhere by propagation, and in our own
+    texts they are not personal data. Without this, feedback listing ECS values was blocked."""
+    global _VOCAB
+    if _VOCAB is None:
+        from privasoc.ecs import ALLOWED
+
+        text = (
+            prompts.PARSER_SYSTEM
+            + prompts.STRUCTURED_SYSTEM
+            + " ".join(" ".join(v) for v in ALLOWED.values())
+            + " ".join(prompts.VRL_HINTS.values())
+        )
+        _VOCAB = {w.lower() for w in re.findall(r"[A-Za-z][\w.-]*", text)}
+    return {o for o in originals if o.lower() not in _VOCAB}
 
 
 def _real_coverage(spec_text, sample, raw_lines, pz, originals, metrics, repairs):
@@ -236,8 +258,15 @@ def generate(
             # Raise the temperature on retries so a small model does not resend the same answer.
             temperature = min(0.2 + 0.2 * (n - 1), 0.8)
             reply = llm.chat(
-                messages, originals=originals, json_mode=False, temperature=temperature
+                messages,
+                originals=_guarded(originals),
+                json_mode=False,
+                temperature=temperature,
             )
+        except LeakError as exc:  # never crash, never send
+            out.attempts.append(Attempt(n, "error", "leak_blocked", [str(exc)], 0.0))
+            out.status, out.reason = "failed", "outgoing prompt blocked by the leak guard"
+            break
         except httpx.TimeoutException:
             say(f"attempt {n}: no answer within {llm.timeout:.0f}s")
             out.attempts.append(Attempt(n, "timeout", "timeout", [], llm.timeout))

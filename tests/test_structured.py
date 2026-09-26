@@ -263,3 +263,37 @@ def test_timestamp_converted_to_utc_is_still_grounded():
     raw = '1.2.3.4 - - [25/Oct/2016:14:49:33 +0200] "GET / HTTP/1.1" 200 612'
     assert ungrounded({"@timestamp": "2016-10-25T12:49:33Z"}, raw) == []
     assert ungrounded({"@timestamp": "2016-10-25T12:50:00Z"}, raw) != []
+
+
+@needs_vector
+def test_kv_section_parses_key_value_formats():
+    """Check Point-style `key:"value"; ...` and firewall `key=value` formats: the model
+    maps keys instead of writing one regex per shape (the 8B model gave up on these)."""
+    spec = structured.load(
+        "prefix: '^(?P<ts>\\S+) (?P<host>\\S+) \\[(?P<rest>.*)\\]$'\nbody: rest\n"
+        "kv: {field_delimiter: '; ', value_delimiter: ':', fields: "
+        "{source.ip: src, destination.port: service, event.action: action, vendor: x}}"
+    )
+    assert any("dropped `vendor`" in r for r in spec.repairs)
+    vrl = structured.compile_vrl(spec)
+    lines = [
+        '2020-03-29T13:19:20Z gw [action:"Accept"; src:"10.1.1.1"; service:"443"]',
+        '2020-03-29T13:19:21Z gw [action:"Drop"; i/f_dir:"in"]',
+    ]
+    res = Sandbox(VECTOR).run(vrl, lines)
+    a, b = res.lines[0].output, res.lines[1].output
+    assert a["source"]["ip"] == "10.1.1.1" and a["destination"]["port"] == 443
+    assert b["event"]["action"] == "Drop" and "source" not in b
+    assert structured.check_lines(spec, lines) == []
+
+
+@needs_vector
+def test_prompt_kv_example_is_valid():
+    text = prompts.STRUCTURED_SYSTEM
+    part = text[text.index("Key=value example") :]
+    line = re.search(r"^line: (.*)$", part, re.M).group(1)
+    spec = re.search(r"```yaml\n(.*?)```", part, re.S).group(1)
+    err, details, _ = evaluate(
+        Sandbox(VECTOR), structured.compile_vrl(structured.load(spec)), [line]
+    )
+    assert err is None, details

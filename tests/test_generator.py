@@ -222,3 +222,20 @@ def test_config_loads_with_windows_style_paths(tmp_path, monkeypatch):
         check=False,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_originals_that_are_our_own_vocabulary_do_not_block_feedback():
+    """Regression (cisco_asa eval): user `admin` blocked feedback listing the ECS
+    event.type value `admin`."""
+    from privasoc.generator import _guarded
+
+    assert _guarded({"admin", "jdoe", "10.1.2.3"}) == {"jdoe", "10.1.2.3"}
+
+
+def test_leak_guard_ends_the_run_cleanly(pz, lines):
+    class Blocking(ScriptedLLM):
+        def chat(self, messages, **kw):
+            raise LeakError("1 original value(s) in the prompt; refusing to send")
+
+    out = generate("s", lines, Blocking([]), pz, Sandbox("unused"), k=5, mode="vrl")
+    assert out.status == "failed" and out.attempts[0].error_class == "leak_blocked"
