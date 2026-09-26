@@ -59,3 +59,29 @@ def test_missing_vector_binary_fails_fast():
 
     with pytest.raises(RuntimeError, match="PRIVASOC_VECTOR_BIN"):
         Sandbox("/nonexistent/vector").check()
+
+
+class FakeModels(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        data = json.dumps({"data": [{"id": "qwen3:8b"}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_preflight_check_validates_server_and_model():
+    import pytest
+
+    srv = HTTPServer(("127.0.0.1", 0), FakeModels)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_port}/v1"
+    LLMClient(Endpoint("local", url, "qwen3:8b")).check()
+    with pytest.raises(RuntimeError, match="not served"):
+        LLMClient(Endpoint("local", url, "missing:1b")).check()
+    srv.shutdown()
+    with pytest.raises(RuntimeError, match="unreachable"):
+        LLMClient(Endpoint("local", url, "qwen3:8b")).check()

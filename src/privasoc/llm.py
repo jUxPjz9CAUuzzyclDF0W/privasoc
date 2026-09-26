@@ -53,6 +53,26 @@ class LLMClient:
         self.call_log = call_log  # callable(dict) -> None
         self.max_tokens = max_tokens  # a runaway generation must not block for minutes
 
+    def _headers(self) -> dict:
+        key = self.endpoint.api_key
+        return {"Authorization": f"Bearer {key}"} if key else {}
+
+    def check(self) -> None:
+        """Fail fast with a clear message if the server or the model is missing."""
+        url = f"{self.endpoint.url.rstrip('/')}/models"
+        try:
+            r = httpx.get(url, headers=self._headers(), timeout=10)
+            r.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"{self.endpoint.name} LLM unreachable at {self.endpoint.url}: {exc}"
+            ) from exc
+        ids = {m.get("id") for m in r.json().get("data", [])}
+        if ids and self.endpoint.model not in ids:
+            raise RuntimeError(
+                f"model {self.endpoint.model!r} not served; available: {sorted(ids)}"
+            )
+
     def chat(
         self,
         messages: list[dict],
