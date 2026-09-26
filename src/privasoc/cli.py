@@ -433,7 +433,10 @@ def eval_report(
 
     from privasoc import evaluation, fixtures, report
 
-    paths = results or [Path("evaluation/results-reference.jsonl"), Path("data/eval/results.jsonl")]
+    paths = results or [
+        *sorted(Path("evaluation").glob("results-*.jsonl")),
+        Path("data/eval/results.jsonl"),
+    ]
     rs = [r for p in paths for r in evaluation.load_results(p)]
     lk = json.loads(leak.read_text(encoding="utf-8")) if leak.exists() else None
     md = report.markdown(report.summarise(rs), lk, report.meta(fixtures.ELASTIC_SHA))
