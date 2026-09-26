@@ -123,6 +123,7 @@ IP_FIELDS = {
     "observer.ip",
     "source.nat.ip",
     "destination.nat.ip",
+    "dns.resolved_ip",
 }
 
 

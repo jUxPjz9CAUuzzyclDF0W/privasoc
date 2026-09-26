@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 
 import yaml
 
+from privasoc.ecs import IP_FIELDS
+
 INT_SUFFIXES = (".port", ".pid", ".bytes", ".packets", ".status_code", ".code", ".ttl")
 _UNSUPPORTED = [
     (r"\(\?=|\(\?!", "lookahead `(?=` / `(?!` is not supported (Rust regex)"),
@@ -391,6 +393,10 @@ def _assign(var: str, ecs: str, group: str) -> list[str]:
     v = f"{var}.{group}"
     if ecs.endswith(INT_SUFFIXES):
         return [f"if {v} != null {{ .{ecs} = to_int({v}) ?? null }}"]
+    if ecs in IP_FIELDS:
+        # Only real IPs reach an IP field (Pi-hole answers "NODATA-IPv6", "<CNAME>"...).
+        s = f'(string({v}) ?? "")'
+        return [f"if is_ipv4{s} || is_ipv6{s} {{ .{ecs} = {v} }}"]
     return [f'if {v} != null && {v} != "" {{ .{ecs} = {v} }}']
 
 

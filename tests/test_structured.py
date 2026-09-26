@@ -196,3 +196,23 @@ def test_single_valued_categorisation_fields_are_unwrapped():
         "event.outcome": "success",
         "event.category": ["network"],
     }
+
+
+@needs_vector
+def test_non_ip_answers_never_reach_ip_fields():
+    """Regression from the first real parser: `dns.resolved_ip: NODATA-IPv6`."""
+    spec = structured.load(
+        "prefix: '^(?P<ts>\\S+ \\S+) (?P<rest>.*)$'\nbody: rest\n"
+        "shapes: [{regex: '^cached (?P<name>\\S+) is (?P<ip>\\S+)', "
+        "fields: {dns.question.name: name, dns.resolved_ip: ip}}]"
+    )
+    vrl = structured.compile_vrl(spec)
+    res = Sandbox(VECTOR).run(
+        vrl,
+        [
+            "2026-09-26 14:46:17.289 cached a.home.lan is NODATA-IPv6",
+            "2026-09-26 14:46:17.289 cached a.home.lan is 10.1.2.3",
+        ],
+    )
+    assert "resolved_ip" not in res.lines[0].output["dns"]
+    assert res.lines[1].output["dns"]["resolved_ip"] == "10.1.2.3"
