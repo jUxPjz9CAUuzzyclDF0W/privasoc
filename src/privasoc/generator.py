@@ -55,15 +55,38 @@ class Outcome:
         }
 
 
-def _parse_answer(text: str) -> dict | None:
+_STATUS = re.compile(r"^\s*STATUS\s*:\s*(\w+)", re.I | re.M)
+_REASON = re.compile(r"^\s*REASON\s*:\s*(.+)$", re.I | re.M)
+_FENCE = re.compile(r"```[ \t]*(?:vrl|coffee|ruby|rust|text)?[ \t]*\n(.*?)```", re.S | re.I)
+
+
+def _parse_answer(text: str) -> tuple[dict | None, str]:
+    """Return (answer, problem). Preferred format: STATUS/REASON lines + a ```vrl block.
+
+    Code is never requested inside JSON: small models break JSON string escaping on
+    regexes (\\d, \\S...). JSON is still accepted for models that insist on it.
+    """
+    status = _STATUS.search(text)
+    fence = _FENCE.search(text)
+    if status or fence:
+        st = status.group(1).lower() if status else "ok"
+        reason = _REASON.search(text)
+        if st == "ok" and not fence:
+            return None, "STATUS is ok but there is no ```vrl code block"
+        return {
+            "status": st,
+            "reason": reason.group(1).strip() if reason else "",
+            "vrl": fence.group(1).strip() if fence else "",
+        }, ""
     m = _JSON.search(text)
-    if not m:
-        return None
-    try:
-        obj = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return obj if isinstance(obj, dict) else None
+    if m:
+        try:
+            obj = json.loads(m.group(0))
+            if isinstance(obj, dict) and isinstance(obj.get("vrl"), str):
+                return obj, ""
+        except json.JSONDecodeError as exc:
+            return None, f"invalid JSON ({exc.msg}); use the STATUS / REASON / ```vrl format"
+    return None, "answer must contain STATUS, REASON and a ```vrl code block"
 
 
 def evaluate(sandbox: Sandbox, vrl: str, lines: list[str]) -> tuple[str | None, list[str], dict]:
@@ -133,7 +156,7 @@ def generate(
     for n in range(1, max_attempts + 1):
         say(f"attempt {n}/{max_attempts}: waiting for {ep.name} model {ep.model}...")
         try:
-            reply = llm.chat(messages, originals=originals)
+            reply = llm.chat(messages, originals=originals, json_mode=False)
         except httpx.TimeoutException:
             say(f"attempt {n}: no answer within {llm.timeout:.0f}s")
             out.attempts.append(Attempt(n, "timeout", "timeout", [], llm.timeout))
@@ -145,14 +168,11 @@ def generate(
             out.status, out.reason = "failed", f"LLM server error: {str(exc)[:200]}"
             break
         total_latency += reply.latency_s
-        answer = _parse_answer(reply.text)
-        if answer is None or not isinstance(answer.get("vrl"), str):
-            err, details, vrl, status = (
-                "json",
-                ["answer must be a JSON object with `vrl`"],
-                None,
-                "?",
-            )
+        answer, problem = _parse_answer(reply.text)
+        if reply.finish_reason == "length":
+            problem = "your answer was cut off (too long): write a shorter program, no prose"
+        if answer is None or problem:
+            err, details, vrl, status = "format", [problem], None, "?"
         else:
             status = str(answer.get("status", "ok"))
             vrl = answer["vrl"]

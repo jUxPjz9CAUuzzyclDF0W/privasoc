@@ -40,6 +40,7 @@ class Reply:
     latency_s: float
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    finish_reason: str | None = None  # "length" = truncated by max_tokens
 
 
 class LLMClient:
@@ -114,7 +115,13 @@ class LLMClient:
         data = resp.json()
         usage = data.get("usage") or {}
         text = _THINK.sub("", data["choices"][0]["message"].get("content") or "").strip()
-        reply = Reply(text, latency, usage.get("prompt_tokens"), usage.get("completion_tokens"))
+        reply = Reply(
+            text,
+            latency,
+            usage.get("prompt_tokens"),
+            usage.get("completion_tokens"),
+            data["choices"][0].get("finish_reason"),
+        )
         if self.call_log:
             self.call_log(
                 {

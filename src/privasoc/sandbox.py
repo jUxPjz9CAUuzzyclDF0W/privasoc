@@ -103,6 +103,8 @@ class Sandbox:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",  # Vector writes UTF-8; Windows would default to cp1252
+            errors="replace",
             timeout=self.timeout,
             env=env,
             check=False,

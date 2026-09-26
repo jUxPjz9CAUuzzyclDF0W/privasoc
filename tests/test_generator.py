@@ -133,3 +133,35 @@ def test_timeout_escalates_cleanly(pz, lines):
     llm.timeout = 1
     out = generate("s", lines, llm, pz, Sandbox("unused"), k=5)
     assert out.status == "needs_escalation" and "too slow" in out.reason
+
+
+def test_answer_formats():
+    from privasoc.generator import _parse_answer
+
+    fenced = "STATUS: ok\nREASON: dnsmasq lines\n```vrl\n.a = parse_regex!(.message, r'\\d+')\n```"
+    ans, problem = _parse_answer(fenced)
+    assert problem == "" and ans["vrl"] == ".a = parse_regex!(.message, r'\\d+')"
+    ans, _ = _parse_answer("STATUS: cannot_parse\nREASON: binary data")
+    assert ans["status"] == "cannot_parse"
+    # the failure seen with small models: a regex inside a JSON string
+    ans, problem = _parse_answer('{"status": "ok", "vrl": "parse_regex!(.message, r\'\\d+\')"}')
+    assert ans is None and "invalid JSON" in problem
+
+
+@needs_vector
+def test_fenced_answer_goes_through_the_loop(pz, lines):
+    llm = ScriptedLLM([f"STATUS: ok\nREASON: r\n```vrl\n{GOOD}\n```"])
+    out = generate("s", lines, llm, pz, Sandbox(VECTOR), k=10)
+    assert out.status == "proposed"
+
+
+def test_truncated_answer_gets_specific_feedback(pz, lines):
+    class Truncating(ScriptedLLM):
+        def chat(self, messages, **kw):
+            self.sent.append(messages[-1]["content"])
+            return Reply("STATUS: ok\n```vrl\n.a = 1", 0.1, finish_reason="length")
+
+    llm = Truncating([])
+    out = generate("s", lines, llm, pz, Sandbox("unused"), k=5, max_attempts=2)
+    assert out.attempts[0].error_class == "format"
+    assert "cut off" in llm.sent[-1]

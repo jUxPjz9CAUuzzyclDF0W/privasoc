@@ -32,9 +32,16 @@ network.protocol, user.name, host.name, host.hostname, process.name, process.pid
 dns.question.name, dns.question.type, dns.answers, observer.vendor, observer.product,
 log.level, rule.name, url.original, http.request.method, http.response.status_code
 
-Answer with JSON only:
-{"status": "ok" | "cannot_parse" | "unsure", "reason": "<one sentence>", "vrl": "<program>"}
-Use "cannot_parse" or "unsure" honestly when the format is beyond you.
+VRL is not Python or JavaScript: there are no methods. Write split(value, "x"), not
+value.split("x"); index arrays with value[0]; strings use double quotes, regexes r'...'.
+
+Answer in exactly this format, nothing else:
+STATUS: ok | cannot_parse | unsure
+REASON: <one sentence>
+```vrl
+<program>
+```
+Use cannot_parse or unsure honestly when the format is beyond you.
 """
 
 
@@ -59,7 +66,7 @@ def parser_feedback(error_class: str, details: list[str]) -> str:
         "runtime": "The program fails on some sample lines.",
         "schema": "The output is not valid ECS.",
         "ungrounded": "Some extracted values do not appear in the line (hallucinated).",
-        "json": "Your answer was not the requested JSON object.",
+        "format": "Your answer did not follow the required format.",
     }[error_class]
     body = "\n".join(f"- {d}" for d in details[:12])
-    return f"{head}\n{body}\n\nFix it and answer with the same JSON format."
+    return f"{head}\n{body}\n\nFix it and answer in the same STATUS / REASON / ```vrl format."
