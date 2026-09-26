@@ -40,6 +40,9 @@ def _grounded(path: str, value: Any, raw: str, low: str) -> bool:
         y, mo, d, h, mi, se = m.groups()
         if f"{h}:{mi}:{se}" in raw or f"{y}-{mo}-{d}" in raw:
             return True
+        # A timezone offset shifts the hour (and maybe the day), never minutes and seconds.
+        if y in raw and f":{mi}:{se}" in raw:
+            return True
         return bool(re.search(r"\b1\d{9}\b", raw))  # epoch seconds
     return False
 

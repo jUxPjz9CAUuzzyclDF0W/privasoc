@@ -1,0 +1,23 @@
+# Hand-written reference spec (not generated): the ceiling of the structured pipeline.
+prefix: '^(?P<ts>\w{3} +\d+ [\d:]+) (?P<host>\S+) (?P<proc>[\w-]+)(?:\[(?P<pid>\d+)\])?: (?P<msg>.*)$'
+body: msg
+timestamp: {group: ts, format: '%b %d %H:%M:%S'}
+constants: {event.kind: event}
+fields: {host.hostname: host, process.name: proc, process.pid: pid}
+shapes:
+  - name: auth
+    regex: '^(?P<result>Accepted|Failed) \w+ for (?:invalid user )?(?P<user>\S+) from (?P<ip>\S+) port (?P<port>\d+)'
+    fields: {user.name: user, source.ip: ip, source.port: port}
+    constants: {event.category: [authentication]}
+  - name: invalid
+    regex: '^(?:Invalid|Illegal) user (?P<user>\S+) from (?P<ip>\S+)'
+    fields: {user.name: user, source.ip: ip}
+    constants: {event.category: [authentication], event.outcome: failure}
+  - name: user_phrase
+    regex: '(?:for (?:illegal |invalid )?user |user=)(?P<user>[\w.-]+)(?: from (?P<host2>\S+))?'
+    fields: {user.name: user}
+  - name: sudo
+    regex: '^\s*(?P<user>[\w.-]+) : '
+    fields: {user.name: user}
+  - name: other
+    regex: '^(?P<text>.*)$'

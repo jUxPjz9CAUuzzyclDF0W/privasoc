@@ -242,3 +242,24 @@ def test_held_out_real_lines_catch_a_shape_the_sample_missed(pz):
     assert "NODATA-IPv6" in llm.sent[-1]  # the model was shown the missed line
     assert "host9.example.com" not in llm.sent[-1]  # ... pseudonymised
     assert out.status == "proposed" and out.metrics["line_coverage"] == 1.0
+
+
+@needs_vector
+def test_ip_field_from_a_prefix_group_compiles():
+    """Regression (reference nginx spec): a prefix group is a plain string, so the IP guard
+    `string(x) ?? ""` was an unnecessary coalescing error (E651)."""
+    spec = structured.load(
+        "prefix: '^(?P<client>\\S+) (?P<rest>.*)$'\nbody: rest\n"
+        "fields: {source.ip: client}\nshapes: [{regex: '^(?P<t>.*)$'}]"
+    )
+    res = Sandbox(VECTOR).run(structured.compile_vrl(spec), ["10.1.2.3 GET /", "web-01 GET /"])
+    assert res.lines[0].output["source"]["ip"] == "10.1.2.3"
+    assert "source" not in res.lines[1].output
+
+
+def test_timestamp_converted_to_utc_is_still_grounded():
+    from privasoc.grounding import ungrounded
+
+    raw = '1.2.3.4 - - [25/Oct/2016:14:49:33 +0200] "GET / HTTP/1.1" 200 612'
+    assert ungrounded({"@timestamp": "2016-10-25T12:49:33Z"}, raw) == []
+    assert ungrounded({"@timestamp": "2016-10-25T12:50:00Z"}, raw) != []

@@ -27,12 +27,12 @@ from privasoc.pseudo import PseudoResult
 # Fields a parser can extract from the line itself. Vendor namespaces, enrichment (geo,
 # related.*), categorisation choices and timestamps (timezone conventions differ) are out.
 SCORED = (
+    # *.address is left out: Elastic copies *.ip into it (a convention, not an extraction).
+    # url.path too: it duplicates url.original unless there is a query string.
     "source.ip",
     "source.port",
     "destination.ip",
     "destination.port",
-    "source.address",
-    "destination.address",
     "user.name",
     "host.hostname",
     "process.name",
@@ -40,7 +40,6 @@ SCORED = (
     "network.transport",
     "dns.question.name",
     "url.original",
-    "url.path",
     "http.request.method",
     "http.response.status_code",
     "http.version",
@@ -79,6 +78,28 @@ class IdentityPseudonymizer:
 
     def pseudonymize(self, text: str) -> PseudoResult:
         return PseudoResult(text=text)
+
+
+class ReferenceLLM:
+    """A 'model' that answers with a hand-written spec from evaluation/reference/<fixture>.yaml.
+    It gives the ceiling of the structured pipeline and checks the scoring end to end."""
+
+    def __init__(self, ref_dir: Path):
+        from privasoc.llm import Endpoint
+
+        self.endpoint = Endpoint("reference", "-", "hand-written")
+        self.ref_dir = ref_dir
+        self.fixture: str | None = None
+        self.timeout = 0.0
+
+    def available(self, name: str) -> bool:
+        return (self.ref_dir / f"{name}.yaml").exists()
+
+    def chat(self, messages, **_kw):
+        from privasoc.llm import Reply
+
+        spec = (self.ref_dir / f"{self.fixture}.yaml").read_text(encoding="utf-8")
+        return Reply(f"STATUS: ok\nREASON: reference\n```yaml\n{spec}\n```", 0.0)
 
 
 def _norm(v) -> str:
@@ -162,6 +183,8 @@ def run_one(
     from privasoc.generator import generate
 
     train, test, expected = split(fx)
+    if isinstance(llm, ReferenceLLM):
+        llm.fixture = fx.name
     t0 = time.monotonic()
     out = generate(
         fx.name,

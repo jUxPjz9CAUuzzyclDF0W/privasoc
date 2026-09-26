@@ -365,19 +365,26 @@ def eval_run(
     }
     store = Store(s.db_path)
     for provider in providers.split(","):
-        ep = _endpoint(s, provider)
-        llm = LLMClient(
-            ep, call_log=store.log_llm_call, timeout=s.llm_timeout, max_tokens=s.llm_max_tokens
-        )
-        llm.check()
+        if provider == "reference":  # hand-written specs: pipeline ceiling, no LLM
+            llm = evaluation.ReferenceLLM(Path("evaluation/reference"))
+            ep = llm.endpoint
+        else:
+            ep = _endpoint(s, provider)
+            llm = LLMClient(
+                ep, call_log=store.log_llm_call, timeout=s.llm_timeout, max_tokens=s.llm_max_tokens
+            )
+            llm.check()
         for p in pseudo.split(","):
-            if p == "off" and ep.remote:
+            if p == "off" and ep.name == "remote":
                 typer.echo("skipping pseudo=off for remote provider (never allowed)")
                 continue
             pz = _pseudonymizer() if p == "on" else evaluation.IdentityPseudonymizer()
             for mode in modes.split(","):
                 for fx in fxs:
-                    for run in range(1, runs + 1):
+                    if provider == "reference" and not llm.available(fx.name):
+                        continue
+                    k = 1 if provider == "reference" else runs
+                    for run in range(1, k + 1):
                         key = (fx.name, mode, ep.name, ep.model, p == "on", run)
                         if key in done:
                             continue
@@ -402,7 +409,7 @@ def eval_run(
 
 @eval_app.command("report")
 def eval_report(
-    results: Path = Path("data/eval/results.jsonl"),
+    results: Annotated[list[Path] | None, typer.Option(help="Result files (repeatable)")] = None,
     leak: Path = Path("reports/leakage.json"),
     out_dir: Path = Path("reports"),
 ) -> None:
@@ -411,7 +418,8 @@ def eval_report(
 
     from privasoc import evaluation, fixtures, report
 
-    rs = evaluation.load_results(results)
+    paths = results or [Path("evaluation/results-reference.jsonl"), Path("data/eval/results.jsonl")]
+    rs = [r for p in paths for r in evaluation.load_results(p)]
     lk = json.loads(leak.read_text(encoding="utf-8")) if leak.exists() else None
     md = report.markdown(report.summarise(rs), lk, report.meta(fixtures.ELASTIC_SHA))
     out_dir.mkdir(parents=True, exist_ok=True)

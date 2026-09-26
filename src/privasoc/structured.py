@@ -406,9 +406,16 @@ def _assign(var: str, ecs: str, group: str) -> list[str]:
         return [f"if {v} != null {{ .{ecs} = to_int({v}) ?? null }}"]
     if ecs in IP_FIELDS:
         # Only real IPs reach an IP field (Pi-hole answers "NODATA-IPv6", "<CNAME>"...).
-        s = f'(string({v}) ?? "")'
-        return [f"if is_ipv4{s} || is_ipv6{s} {{ .{ecs} = {v} }}"]
-    return [f'if {v} != null && {v} != "" {{ .{ecs} = {v} }}']
+        # The `if true` makes the type string|null whatever the source (a prefix group is
+        # a plain string), so `string(x) ?? ""` type-checks in every case.
+        tmp = f"ip_{var}_{group}"
+        s = f'(string({tmp}) ?? "")'
+        return [
+            f"{tmp} = if true {{ {v} }} else {{ null }}",
+            f"if is_ipv4{s} || is_ipv6{s} {{ .{ecs} = {tmp} }}",
+        ]
+    # "-" is the usual "no value" placeholder (web logs, CLF, many firewalls)
+    return [f'if {v} != null && {v} != "" && {v} != "-" {{ .{ecs} = {v} }}']
 
 
 def compile_vrl(spec: Spec) -> str:

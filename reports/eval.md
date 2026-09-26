@@ -4,6 +4,16 @@ Fixtures: Elastic integrations pipeline tests @ `354ff4c940`, first half of each
 
 | configuration | pass@1 | pass@k | F1 (all runs) | F1 (proposed) | held-out parsed | attempts | LLM s/run | ungrounded |
 |---|---|---|---|---|---|---|---|---|
+| hand-written (reference) · structured · pseudo on | 100% | 100% (k=1) | 0.87 | 0.87 | 91% | 1 | 0.0 | 0 |
+
+Per fixture (proposed/runs, best F1):
+
+| fixture | hand-written (reference) · structured · pseudo on |
+|---|---|
+| apache | 1/1, 0.83 |
+| iptables | 1/1, 0.80 |
+| nginx | 1/1, 0.91 |
+| sshd_auth | 1/1, 0.95 |
 
 ## Pseudonymisation leakage
 

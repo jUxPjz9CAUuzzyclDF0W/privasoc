@@ -1,0 +1,11 @@
+# Hand-written reference spec (not generated): the ceiling of the structured pipeline.
+prefix: '^(?:<\d+>)?(?P<ts>\w{3} +\d+ [\d:]+|\d{4}-\d\d-\d\dT\S+) (?P<host>[^\s:]+):? (?:kernel: )?(?P<rest>.*)$'
+body: rest
+constants: {event.kind: event, event.category: [network]}
+fields: {host.hostname: host}
+shapes:
+  - name: packet
+    regex: 'SRC=(?P<src>\S+) DST=(?P<dst>\S+).*?PROTO=(?P<proto>\w+)(?: SPT=(?P<spt>\d+) DPT=(?P<dpt>\d+))?'
+    fields: {source.ip: src, destination.ip: dst, network.transport: proto, source.port: spt, destination.port: dpt}
+  - name: other
+    regex: '^(?P<text>.*)$'

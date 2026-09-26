@@ -1,0 +1,12 @@
+# Hand-written reference spec (not generated): the ceiling of the structured pipeline.
+prefix: '^(?P<client>\S+) (?P<ident>\S+) (?P<auth>\S+) \[(?P<ts>[^\]]+)\] (?P<rest>.*)$'
+body: rest
+timestamp: {group: ts, format: '%d/%b/%Y:%H:%M:%S %z'}
+constants: {event.kind: event, event.category: [web]}
+fields: {source.ip: client, user.name: auth}
+shapes:
+  - name: request
+    regex: '^"(?P<method>[A-Z]+) (?P<url>\S+) HTTP/(?P<ver>[\d.]+)" (?P<status>\d{3}) (?P<bytes>\d+|-)(?: "(?P<ref>[^"]*)" "(?P<ua>[^"]*)")?'
+    fields: {http.request.method: method, url.original: url, http.version: ver, http.response.status_code: status, user_agent.original: ua}
+  - name: other
+    regex: '^(?P<text>.*)$'
