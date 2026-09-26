@@ -230,6 +230,7 @@ def test_originals_that_are_our_own_vocabulary_do_not_block_feedback():
     from privasoc.generator import _guarded
 
     assert _guarded({"admin", "jdoe", "10.1.2.3"}) == {"jdoe", "10.1.2.3"}
+    assert _guarded({"Hostname"}) == set()  # part of `host.hostname` in the prompt
 
 
 def test_leak_guard_ends_the_run_cleanly(pz, lines):

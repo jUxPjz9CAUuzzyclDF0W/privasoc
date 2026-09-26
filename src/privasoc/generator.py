@@ -134,7 +134,9 @@ def _guarded(originals: set[str]) -> set[str]:
             + " ".join(" ".join(v) for v in ALLOWED.values())
             + " ".join(prompts.VRL_HINTS.values())
         )
-        _VOCAB = {w.lower() for w in re.findall(r"[A-Za-z][\w.-]*", text)}
+        words = {w.lower() for w in re.findall(r"[A-Za-z][\w.-]*", text)}
+        # also every part of dotted names: `host.hostname` contains the word `hostname`
+        _VOCAB = words | {p for w in words for p in re.split(r"[._-]", w) if p}
     return {o for o in originals if o.lower() not in _VOCAB}
 
 
