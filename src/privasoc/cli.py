@@ -147,7 +147,12 @@ def _run_generation(source: str, provider: str, store: Store, s: Settings, lines
     from privasoc.llm import LLMClient
     from privasoc.sandbox import Sandbox
 
-    llm = LLMClient(_endpoint(s, provider), call_log=store.log_llm_call)
+    llm = LLMClient(
+        _endpoint(s, provider),
+        call_log=store.log_llm_call,
+        timeout=s.llm_timeout,
+        max_tokens=s.llm_max_tokens,
+    )
     sandbox = Sandbox(s.vector_bin)
     try:  # fail fast, before minutes of LLM time
         typer.echo(f"sandbox: {sandbox.check()}")

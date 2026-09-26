@@ -8,6 +8,8 @@ import re
 import uuid
 from dataclasses import dataclass, field
 
+import httpx
+
 from privasoc import prompts
 from privasoc.ecs import validate
 from privasoc.grounding import ungrounded
@@ -130,7 +132,18 @@ def generate(
     say(f"sampled {len(sample)} lines covering {len(templates)} templates")
     for n in range(1, max_attempts + 1):
         say(f"attempt {n}/{max_attempts}: waiting for {ep.name} model {ep.model}...")
-        reply = llm.chat(messages, originals=originals)
+        try:
+            reply = llm.chat(messages, originals=originals)
+        except httpx.TimeoutException:
+            say(f"attempt {n}: no answer within {llm.timeout:.0f}s")
+            out.attempts.append(Attempt(n, "timeout", "timeout", [], llm.timeout))
+            out.status = "needs_escalation"
+            out.reason = f"local model too slow (> {llm.timeout:.0f}s per answer)"
+            break
+        except httpx.HTTPError as exc:
+            out.attempts.append(Attempt(n, "error", "http", [str(exc)[:300]], 0.0))
+            out.status, out.reason = "failed", f"LLM server error: {str(exc)[:200]}"
+            break
         total_latency += reply.latency_s
         answer = _parse_answer(reply.text)
         if answer is None or not isinstance(answer.get("vrl"), str):

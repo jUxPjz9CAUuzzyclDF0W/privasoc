@@ -120,3 +120,16 @@ def test_generated_vector_pipeline_is_valid(tmp_path):
         check=False,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_timeout_escalates_cleanly(pz, lines):
+    import httpx
+
+    class SlowLLM(ScriptedLLM):
+        def chat(self, messages, **kw):
+            raise httpx.ReadTimeout("timed out")
+
+    llm = SlowLLM([])
+    llm.timeout = 1
+    out = generate("s", lines, llm, pz, Sandbox("unused"), k=5)
+    assert out.status == "needs_escalation" and "too slow" in out.reason

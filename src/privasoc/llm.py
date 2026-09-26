@@ -43,12 +43,15 @@ class Reply:
 
 
 class LLMClient:
-    def __init__(self, endpoint: Endpoint, timeout: float = 600.0, call_log=None):
+    def __init__(
+        self, endpoint: Endpoint, timeout: float = 300.0, call_log=None, max_tokens: int = 2048
+    ):
         if not endpoint.url or not endpoint.model:
             raise ValueError(f"{endpoint.name} LLM needs a URL and a model name")
         self.endpoint = endpoint
         self.timeout = timeout
         self.call_log = call_log  # callable(dict) -> None
+        self.max_tokens = max_tokens  # a runaway generation must not block for minutes
 
     def chat(
         self,
@@ -68,7 +71,12 @@ class LLMClient:
         leaks = Pseudonymizer.leaks(outgoing, originals)
         if leaks:
             raise LeakError(f"{len(leaks)} original value(s) in the prompt; refusing to send")
-        body = {"model": self.endpoint.model, "messages": messages, "temperature": temperature}
+        body = {
+            "model": self.endpoint.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": self.max_tokens,
+        }
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         headers = (
