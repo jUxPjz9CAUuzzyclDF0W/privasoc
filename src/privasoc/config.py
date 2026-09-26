@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     llm_local_url: str = "http://127.0.0.1:11434/v1"
     llm_local_model: str = ""
+    llm_local_think: bool = False
     llm_remote_url: str = ""
     llm_remote_model: str = ""
     llm_remote_api_key: SecretStr = SecretStr("")

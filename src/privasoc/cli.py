@@ -38,6 +38,14 @@ def _pseudonymizer() -> Pseudonymizer:
 def init(env_file: Path = Path(".env"), example: Path = Path(".env.example")) -> None:
     """Create .env with freshly generated secrets (existing values are kept, nothing printed)."""
     lines = (env_file if env_file.exists() else example).read_text().splitlines()
+    present = {ln.partition("=")[0] for ln in lines if "=" in ln}
+    added = []
+    if env_file.exists() and example.exists():  # bring in settings added since
+        for ln in example.read_text().splitlines():
+            key = ln.partition("=")[0]
+            if "=" in ln and not ln.startswith("#") and key not in present:
+                lines.append(ln)
+                added.append(key)
     out, generated = [], []
     for line in lines:
         key, sep, value = line.partition("=")
@@ -48,6 +56,8 @@ def init(env_file: Path = Path(".env"), example: Path = Path(".env.example")) ->
     env_file.write_text("\n".join(out) + "\n")
     env_file.chmod(0o600)
     typer.echo(f"{env_file}: generated {', '.join(generated) or 'nothing (already set)'}")
+    if added:
+        typer.echo(f"added new settings with defaults: {', '.join(added)}")
     typer.echo("Keep PRIVASOC_VAULT_KEY safe: without it the vault cannot be re-identified.")
 
 
@@ -129,7 +139,7 @@ def _endpoint(s: Settings, provider: str):
         return Endpoint(
             "remote", s.llm_remote_url, s.llm_remote_model, s.llm_remote_api_key.get_secret_value()
         )
-    return Endpoint("local", s.llm_local_url, s.llm_local_model)
+    return Endpoint("local", s.llm_local_url, s.llm_local_model, think=s.llm_local_think)
 
 
 def _run_generation(source: str, provider: str, store: Store, s: Settings, lines: list[str]):
@@ -138,14 +148,22 @@ def _run_generation(source: str, provider: str, store: Store, s: Settings, lines
     from privasoc.sandbox import Sandbox
 
     llm = LLMClient(_endpoint(s, provider), call_log=store.log_llm_call)
+    sandbox = Sandbox(s.vector_bin)
+    try:  # fail fast, before minutes of LLM time
+        typer.echo(f"sandbox: {sandbox.check()}")
+        llm.check()
+    except RuntimeError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     return generate(
         source,
         lines,
         llm,
         _pseudonymizer(),
-        Sandbox(s.vector_bin),
+        sandbox,
         k=s.sample_size,
         max_attempts=s.max_attempts,
+        progress=lambda msg: typer.echo(f"  {msg}"),
     )
 
 

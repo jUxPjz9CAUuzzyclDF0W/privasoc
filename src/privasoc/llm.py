@@ -27,6 +27,7 @@ class Endpoint:
     url: str
     model: str
     api_key: str = ""
+    think: bool = True  # False: ask reasoning models to answer directly (much faster)
 
     @property
     def remote(self) -> bool:
@@ -57,6 +58,12 @@ class LLMClient:
         json_mode: bool = True,
         temperature: float = 0.2,
     ) -> Reply:
+        if not self.endpoint.think and messages and messages[-1]["role"] == "user":
+            # Qwen3-style soft switch; ignored by models without a reasoning mode.
+            messages = [
+                *messages[:-1],
+                {**messages[-1], "content": messages[-1]["content"] + "\n/no_think"},
+            ]
         outgoing = "\n".join(m["content"] for m in messages)
         leaks = Pseudonymizer.leaks(outgoing, originals)
         if leaks:

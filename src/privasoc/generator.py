@@ -104,6 +104,7 @@ def generate(
     k: int = 10,
     max_attempts: int = 5,
     examples: list[dict] | None = None,
+    progress=None,
 ) -> Outcome:
     idx, clusters = stratified_sample(raw_lines, k)
     raw_sample = [raw_lines[i] for i in idx]
@@ -124,7 +125,11 @@ def generate(
     ]
     previous_class = None
     total_latency = 0.0
+    say = progress or (lambda _msg: None)
+    base = messages[:]
+    say(f"sampled {len(sample)} lines covering {len(templates)} templates")
     for n in range(1, max_attempts + 1):
+        say(f"attempt {n}/{max_attempts}: waiting for {ep.name} model {ep.model}...")
         reply = llm.chat(messages, originals=originals)
         total_latency += reply.latency_s
         answer = _parse_answer(reply.text)
@@ -147,6 +152,10 @@ def generate(
             err, details, metrics = evaluate(sandbox, vrl, sample)
             out.metrics = metrics
         out.attempts.append(Attempt(n, status, err, details, reply.latency_s, vrl))
+        say(
+            f"attempt {n}: {err or 'ok'} after {reply.latency_s:.0f}s"
+            + (f" ({details[0][:120]})" if details else "")
+        )
         if err is None:
             out.status, out.reason, out.vrl = "proposed", "all checks passed", vrl
             break
@@ -156,8 +165,12 @@ def generate(
             out.vrl = vrl
             break
         previous_class = err
-        messages.append({"role": "assistant", "content": reply.text})
-        messages.append({"role": "user", "content": prompts.parser_feedback(err, details)})
+        # Keep only the latest attempt in context: small local models have small windows.
+        messages = [
+            *base,
+            {"role": "assistant", "content": reply.text},
+            {"role": "user", "content": prompts.parser_feedback(err, details)},
+        ]
     else:
         out.status, out.reason = (
             "needs_escalation",

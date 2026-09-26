@@ -69,6 +69,24 @@ class Sandbox:
         self.timeout = timeout
         self.workers = workers
 
+    def check(self) -> str:
+        """Return the Vector version, or raise a clear error if the binary is unusable."""
+        try:
+            proc = subprocess.run(  # noqa: S603 - fixed argv
+                [self.vector_bin, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except (FileNotFoundError, PermissionError) as exc:
+            raise RuntimeError(
+                f"Vector binary not found at {self.vector_bin!r}: set PRIVASOC_VECTOR_BIN"
+            ) from exc
+        if proc.returncode != 0:
+            raise RuntimeError(f"{self.vector_bin} --version failed: {proc.stderr[:300]}")
+        return proc.stdout.strip()
+
     def _run(self, program_path: Path, raw: str, tmp: Path, i: int) -> tuple[int, str, str]:
         inp = tmp / f"in{i}.json"
         inp.write_text(json.dumps({"message": raw}) + "\n", encoding="utf-8")

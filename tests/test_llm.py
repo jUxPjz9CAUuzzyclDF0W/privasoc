@@ -41,3 +41,21 @@ def test_openai_compatible_call_strips_thinking_and_logs_metadata_only():
     assert body["response_format"] == {"type": "json_object"}
     assert logged[0]["prompt_tokens"] == 12
     assert "content" not in json.dumps(logged)  # never the prompt itself
+
+
+def test_local_thinking_off_adds_soft_switch():
+    srv = HTTPServer(("127.0.0.1", 0), FakeOpenAI)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    ep = Endpoint("local", f"http://127.0.0.1:{srv.server_port}/v1", "qwen3:8b", think=False)
+    LLMClient(ep).chat([{"role": "user", "content": "hi"}], originals=set())
+    srv.shutdown()
+    assert FakeOpenAI.seen[-1][2]["messages"][-1]["content"].endswith("/no_think")
+
+
+def test_missing_vector_binary_fails_fast():
+    import pytest
+
+    from privasoc.sandbox import Sandbox
+
+    with pytest.raises(RuntimeError, match="PRIVASOC_VECTOR_BIN"):
+        Sandbox("/nonexistent/vector").check()
