@@ -78,11 +78,26 @@ def _regex(src, where: str, problems: list[str]) -> re.Pattern | None:
         return None
 
 
+def _resolve(ecs: str, where: str, repairs: list[str]) -> str | None:
+    """A real ECS field name for `ecs`: itself, a unique close match (reported), or None."""
+    from privasoc.ecs import known, suggest
+
+    if _ECS_PATH.match(ecs) and known(ecs):
+        return ecs
+    hint = suggest(ecs)
+    if hint:
+        repairs.append(f"{where}: renamed `{ecs}` to the ECS field `{hint}`")
+        return hint
+    return None
+
+
 def _ecs_problem(ecs: str) -> str | None:
-    from privasoc.ecs import TOP_LEVEL
+    from privasoc.ecs import TOP_LEVEL, known
 
     if not _ECS_PATH.match(ecs):
         return f"`{ecs}` is not a valid ECS field path"
+    if ecs.split(".")[0] in TOP_LEVEL and not known(ecs):
+        return f"`{ecs}` is not an ECS field"
     if ecs.split(".")[0] not in TOP_LEVEL:
         return (
             f"`{ecs}` is not an ECS field (ECS fields look like source.ip, "
@@ -104,6 +119,9 @@ def _mapping(
     out = {}
     for ecs, group in obj.items():
         bad = _ecs_problem(str(ecs))
+        fixed = _resolve(str(ecs), where, repairs) if bad else str(ecs)
+        if fixed:
+            ecs, bad = fixed, None
         if bad:
             repairs.append(f"{where}: dropped `{ecs}` ({bad})")
         elif str(group) not in groups:
@@ -340,6 +358,8 @@ def _constants(obj, where: str, problems: list[str], repairs: list[str]) -> dict
     for ecs, value in obj.items():
         key = str(ecs)
         bad = _ecs_problem(key)
+        if bad and (fixed := _resolve(key, where, repairs)):
+            key, bad = fixed, None
         if bad:
             repairs.append(f"{where}: dropped `{key}` ({bad})")
             continue
@@ -415,6 +435,8 @@ def load(text: str, lines: list[str] | None = None, structure=None) -> Spec:
             kv_fields = {}
             for ecs, key in (raw_kv.get("fields") or {}).items():
                 bad = _ecs_problem(str(ecs))
+                if bad and (fixed := _resolve(str(ecs), "kv.fields", repairs)):
+                    ecs, bad = fixed, None
                 if bad:
                     repairs.append(f"kv.fields: dropped `{ecs}` ({bad})")
                 else:

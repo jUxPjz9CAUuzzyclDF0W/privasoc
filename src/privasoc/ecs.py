@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 TOP_LEVEL = {
@@ -127,6 +128,57 @@ IP_FIELDS = {
 }
 
 
+FIELDS = frozenset(
+    ln.strip()
+    for ln in (Path(__file__).with_name("ecs_fields.txt")).read_text(encoding="utf-8").splitlines()
+    if ln.strip() and not ln.startswith("#")
+)
+# Names small models use for ECS fields that exist under another name.
+ALIASES = {
+    "http.method": "http.request.method",
+    "http.uri": "url.original",
+    "http.url": "url.original",
+    "http.path": "url.path",
+    "http.user_agent": "user_agent.original",
+    "http.useragent": "user_agent.original",
+    "http.status_code": "http.response.status_code",
+    "http.status": "http.response.status_code",
+    "http.referer": "http.request.referrer",
+    "http.referrer": "http.request.referrer",
+    "http.bytes": "http.response.body.bytes",
+    "response.body_size": "http.response.body.bytes",
+    "url.path_original": "url.original",
+    "source.hostname": "source.domain",
+    "destination.hostname": "destination.domain",
+    "user.username": "user.name",
+    "source.user": "source.user.name",
+    "network.direction_name": "network.direction",
+    "dns.query": "dns.question.name",
+    "dns.question.class_name": "dns.question.class",
+    "dns.type": "dns.question.type",
+}
+
+
+def known(path: str) -> bool:
+    return path in FIELDS or path.startswith("labels.")
+
+
+def suggest(path: str) -> str | None:
+    """Closest real ECS field for an invented name, or None."""
+    if path in ALIASES:
+        return ALIASES[path]
+    parts = path.split(".")
+    same = [f for f in FIELDS if f.split(".")[-1] == parts[-1] and f.split(".")[0] == parts[0]]
+    if len(same) == 1:
+        return same[0]
+    if len(parts) >= 2:
+        tail = ".".join(parts[-2:])
+        cands = [f for f in FIELDS if f.endswith("." + tail) or f == tail]
+        if len(cands) == 1:
+            return cands[0]
+    return None
+
+
 def flatten(doc: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
     if isinstance(doc, dict):
         for k, v in doc.items():
@@ -147,6 +199,11 @@ def validate(doc: dict) -> list[str]:
     if not leaves:
         errors.append("no ECS field extracted")
     for path, value in leaves:
+        if not known(path) and path.split(".")[0] in TOP_LEVEL:
+            hint = suggest(path)
+            errors.append(
+                f"`{path}` is not an ECS field" + (f"; did you mean `{hint}`?" if hint else "")
+            )
         values = value if isinstance(value, list) else [value]
         if path in ALLOWED:
             bad = [v for v in values if v not in ALLOWED[path]]

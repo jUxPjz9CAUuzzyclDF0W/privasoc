@@ -16,6 +16,8 @@ class PseudoResult:
     replacements: list[tuple[str, str]] = field(default_factory=list)
     # originals that must never appear in anything derived from `text`
     originals: set[str] = field(default_factory=set)
+    # original -> pseudonym, for propagation across several lines
+    mapping: dict[str, str] = field(default_factory=dict)
 
 
 class Pseudonymizer:
@@ -60,7 +62,22 @@ class Pseudonymizer:
                 flags=re.I,
             )
         result.text = out
+        result.mapping = seen
+        result.originals |= set(seen)
         return result
+
+    @staticmethod
+    def propagate(text: str, mapping: dict[str, str]) -> str:
+        """Replace values detected in *other* lines (a host keyed in one line may appear
+        bare in the next: found by the leak guard on iptables logs)."""
+        for original in sorted(mapping, key=len, reverse=True):
+            text = re.sub(
+                rf"(?<![A-Za-z0-9]){re.escape(original)}(?![A-Za-z0-9])",
+                lambda _m, t=mapping[original]: t,
+                text,
+                flags=re.I,
+            )
+        return text
 
     def reidentify(self, text: str) -> str:
         """Replace every known pseudonym in `text` by its original (display only)."""

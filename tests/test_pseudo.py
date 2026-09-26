@@ -144,3 +144,13 @@ def test_private_tlds_are_detected_but_paths_and_namespaces_are_not():
 )
 def test_vendor_format_regressions(line, kind, value):
     assert (kind, value) in kinds(line), kinds(line)
+
+
+def test_cross_line_propagation(pz):
+    """Regression (iptables eval): a host detected in one line's syslog header appeared bare
+    in another line; the leak guard blocked the prompt."""
+    a = pz.pseudonymize("Oct 10 07:25:12 fw-lab-01 kernel: IN=eth0 SRC=10.1.1.1")
+    b = pz.pseudonymize("[7231651.1] [fw-lab-01 RULE] IN=eth0 SRC=10.1.1.2")
+    assert "fw-lab-01" in b.text
+    fixed = pz.propagate(b.text, {**a.mapping, **b.mapping})
+    assert "fw-lab-01" not in fixed and pz.leaks(fixed, a.originals | b.originals) == []

@@ -152,8 +152,12 @@ def _real_coverage(spec_text, sample, raw_lines, pz, originals, metrics, repairs
         return None, repairs
     idx, _ = stratified_sample(missed, 5)
     shown = [pz.pseudonymize(missed[i]) for i in idx]
+    mapping: dict[str, str] = {}
     for p in shown:
         originals.update(p.originals)
+        mapping.update(getattr(p, "mapping", {}) or {})
+    for p in shown:
+        p.text = Pseudonymizer.propagate(p.text, mapping)
     details = [
         f"line of the same source matching no shape ({len(missed)} such lines): `{p.text}`"
         for p in shown
@@ -232,7 +236,10 @@ def generate(
     idx, clusters = stratified_sample(raw_lines, k)
     raw_sample = [raw_lines[i] for i in idx]
     pres = [pz.pseudonymize(line) for line in raw_sample]
-    sample = [p.text for p in pres]
+    mapping: dict[str, str] = {}
+    for p in pres:
+        mapping.update(getattr(p, "mapping", {}) or {})
+    sample = [Pseudonymizer.propagate(p.text, mapping) if mapping else p.text for p in pres]
     originals = set().union(*(p.originals for p in pres)) if pres else set()
     # Templates are computed on pseudonymised lines so they never carry originals.
     _, pclusters = stratified_sample(sample, len(sample))
