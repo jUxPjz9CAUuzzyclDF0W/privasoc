@@ -4,7 +4,7 @@
 {% block content %}
 <h1>Alerts</h1>
 <div class="actions">
-  {% for st in ["open", "new", "acknowledged", "closed_tp", "closed_fp", "all"] %}
+  {% for st in ["open", "new", "acknowledged", "closed_tp", "closed_fp", "resolved", "all"] %}
   <a href="/ui/alerts?status={{ st }}" {% if st == status %}class="badge"{% endif %}>{{ st.replace("_", " ") }}</a>
   {% endfor %}
   <form method="post" action="/ui/detection/run"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Run detection now</button></form>

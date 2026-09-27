@@ -58,13 +58,20 @@ def _host(store: Store, source: str) -> dict:
 @_vector_errors
 def approve_host(store: Store, s: Settings, source: str) -> dict:
     """Known format: ingested at once. Unknown: lines stay in quarantine for `propose`."""
+    from privasoc.detect import alerts as al
+
     _host(store, source)
-    return onboarding.approve_host(store, s, Sandbox(s.vector_bin), source)
+    out = onboarding.approve_host(store, s, Sandbox(s.vector_bin), source)
+    al.resolve(store, "host", "new_sender", source)
+    return out
 
 
 def reject_host(store: Store, source: str) -> dict:
+    from privasoc.detect import alerts as al
+
     _host(store, source)
     store.set_host(source, "rejected")
+    al.resolve(store, "host", "new_sender", source)
     return {"source": source, "status": "rejected"}
 
 

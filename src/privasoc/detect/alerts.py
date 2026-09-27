@@ -8,7 +8,7 @@ from datetime import timedelta
 from privasoc.store import Store, parse_ts, utcnow
 
 OPEN = ("new", "acknowledged")
-STATUSES = ("new", "acknowledged", "closed_tp", "closed_fp")
+STATUSES = ("new", "acknowledged", "closed_tp", "closed_fp", "resolved")
 LEVEL_RANK = {"informational": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 COLS = (
     "id", "kind", "rule_id", "title", "level", "source", "group_key", "first_seen",
@@ -194,3 +194,15 @@ def notify_pending(store: Store, url: str, fmt: str, min_level: str, base_url: s
         with store.conn:
             store.conn.execute("UPDATE alerts SET notified=? WHERE id=?", (flag, a["id"]))
     return {"sent": sent, "failed": failed}
+
+
+def resolve(store: Store, kind: str, rule_id: str, source: str) -> int:
+    """Close open alerts that a decision made moot (a new sender once approved or rejected).
+    `resolved` is neither a true nor a false positive: triage evaluation ignores it."""
+    with store.conn:
+        cur = store.conn.execute(
+            "UPDATE alerts SET status='resolved', updated_at=? WHERE kind=? AND rule_id=? AND "
+            "source=? AND status IN ('new','acknowledged')",
+            (utcnow(), kind, rule_id, source),
+        )
+    return cur.rowcount

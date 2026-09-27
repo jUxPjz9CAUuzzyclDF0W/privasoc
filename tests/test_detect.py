@@ -280,3 +280,16 @@ def test_keywords_with_all_modifier():
     r = rule({"k": {"|all": ["failed", "bob"]}, "condition": "k"})
     assert r.unsupported is None and r.match(DOC)
     assert not rule({"k": {"|all": ["failed", "alice"]}, "condition": "k"}).match(DOC)
+
+
+def test_new_sender_alert_is_resolved_by_the_decision(tmp_path):
+    s = Settings(api_token=SecretStr("t"), hmac_key=SecretStr("h" * 32),
+                 vault_key=SecretStr(Fernet.generate_key().decode()), data_dir=tmp_path)  # fmt: skip
+    store = Store(s.db_path)
+    store.ingest([Record("syslog:192.0.2.9", "x"), Record("syslog:192.0.2.8", "y")])
+    host_alerts(store, lambda st, h: {"status": "ok", "reasons": []})
+    service.reject_host(store, "syslog:192.0.2.9")
+    st = {a["source"]: a["status"] for a in al.alerts(store, "all")}
+    assert st == {"syslog:192.0.2.9": "resolved", "syslog:192.0.2.8": "new"}
+    host_alerts(store, lambda st, h: {"status": "ok", "reasons": []})
+    assert len(al.alerts(store, "all")) == 2  # never raised twice for the same sender
