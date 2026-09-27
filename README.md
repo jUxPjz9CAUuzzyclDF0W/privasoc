@@ -177,6 +177,29 @@ ASA); on the holdout formats the detectors already caught almost everything. The
 pass sends clear-text lines, so it only talks to a model on this machine or the local
 network (checked in code); before any remote API call it runs on the samples first.
 
+## Detection and triage
+
+Normalised events go through Sigma rules: privasoc's own (SSH brute force, port scan, web
+content scanning, long DNS labels) and the SigmaHQ rules for DNS, firewalls, proxies, web
+servers and Linux (`privasoc sigma fetch`, Detection Rule License 1.1, never committed; 70 of
+the 72 run, the two others are listed with the field they miss). The engine is a small
+Sigma evaluator of our own, with Sigma 2 correlations. Alerts also come from host health
+(a firewall that goes silent) and from new senders waiting for approval; one webhook
+(JSON, ntfy, Discord or Slack) carries title, level and count, never event content.
+
+Each alert can be triaged by the local model (or, on request, the remote one) on
+pseudonymised evidence. The answer has a fixed structure (verdict, severity, confidence,
+reasons citing event ids, next steps, ATT&CK ids) and is checked: a claim citing an event
+that is not in the evidence, an ATT&CK id the rule does not carry, or an address the
+evidence does not contain is flagged. The analyst closes the alert as true or false
+positive, which is what step 8 will measure the triage against.
+
+```bash
+uv run privasoc sigma fetch        # SigmaHQ subset into data/sigma/
+uv run privasoc detect             # one detection pass (serve runs it every minute)
+uv run privasoc alerts list ; uv run privasoc alerts triage <id> ; uv run privasoc alerts close <id> tp
+```
+
 ## Privacy model
 
 | Guarantee | How |
@@ -198,7 +221,7 @@ on free text; step 5 adds a local-LLM pass and the evaluation publishes both rat
    Source onboarding (pending hosts, known formats first, backfill) and host health. ✅
 4. **Web review UI**: hosts, health, parser review, quarantine, events. ✅
 5. **Local-LLM pseudonymisation that learns** (human-approved rules, UI page). ✅
-6. Sigma detection + alerts + structured AI triage.
+6. **Sigma detection + alerts + structured AI triage**. ✅
 7. AI-written Sigma rules, natural-language hunting.
 8. Triage evaluation; Windows and Proxmox collection.
 

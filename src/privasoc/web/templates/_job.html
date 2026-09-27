@@ -18,6 +18,11 @@
     </table>
     {% else %}<p>The local model found no residual personal data.</p>{% endif %}
   </div>
+  {% elif job.result and job.kind == "triage" %}
+  <div class="panel">
+    <p>AI verdict: {{ badge(job.result.verdict or "error") }} · {{ job.result.problems }} problem(s) flagged</p>
+    <p><a href="/ui/alert?id={{ job.result.alert }}">Back to alert #{{ job.result.alert }}</a></p>
+  </div>
   {% endif %}
   {% if job.error %}<div class="flash error">{{ job.error }}</div>{% endif %}
   <div class="panel"><pre>{% for l in job.log %}{{ l }}

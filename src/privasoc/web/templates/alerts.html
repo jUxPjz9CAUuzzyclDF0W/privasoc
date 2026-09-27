@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, host_link with context %}
+{% block title %}Alerts · privasoc{% endblock %}
+{% block content %}
+<h1>Alerts</h1>
+<div class="actions">
+  {% for st in ["open", "new", "acknowledged", "closed_tp", "closed_fp", "all"] %}
+  <a href="/ui/alerts?status={{ st }}" {% if st == status %}class="badge"{% endif %}>{{ st.replace("_", " ") }}</a>
+  {% endfor %}
+  <form method="post" action="/ui/detection/run"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Run detection now</button></form>
+</div>
+<p class="muted">Open: {{ counts.open }} · critical {{ counts.critical }} · high {{ counts.high }} · medium {{ counts.medium }} · low {{ counts.low }}. Detection also runs in the background of <code>privasoc serve</code>.</p>
+<div class="panel">
+{% if alerts %}<table>
+<tr><th>#</th><th>Level</th><th>Alert</th><th>Host</th><th class="num">Count</th><th>Last seen</th><th>Status</th><th>AI</th></tr>
+{% for a in alerts %}
+<tr><td><a href="/ui/alert?id={{ a.id }}">{{ a.id }}</a></td><td>{{ badge(a.level) }}</td>
+<td><a href="/ui/alert?id={{ a.id }}">{{ a.title }}</a> <span class="muted">{{ a.kind }}</span></td>
+<td>{{ host_link(a.source) }}</td><td class="num">{{ a.count }}</td><td>{{ a.last_seen[:19] }}</td>
+<td>{{ badge(a.status) }}</td>
+<td>{% if a.triage and a.triage.result %}{{ badge(a.triage.result.verdict) }}{% else %}-{% endif %}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="muted">No alert{% if status != "all" %} with status {{ status }}{% endif %}.</p>{% endif %}
+</div>
+{% endblock %}

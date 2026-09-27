@@ -408,3 +408,176 @@ def rule_preview(store: Store, s: Settings, rule_id: str, source: str | None = N
         return {"rule": rule, **learn.preview(pz, rule, lines)}
     finally:
         pz.vault.close()
+
+
+# ---------------------------------------------------------------------- detection (step 6)
+
+SIGMA_TAG = "r2026-07-01"  # SigmaHQ release, pinned (D50)
+SIGMA_DIRS = (
+    "rules/network/dns",
+    "rules/network/firewall",
+    "rules/web/proxy_generic",
+    "rules/web/webserver_generic",
+    "rules/linux/builtin",
+)
+_ENGINE: dict = {}
+
+
+def engine(s: Settings, reload: bool = False):
+    from privasoc.detect.engine import Engine
+
+    key = str(s.sigma_dir)
+    if reload or key not in _ENGINE:
+        _ENGINE[key] = Engine.from_dirs(s.sigma_dir)
+    return _ENGINE[key]
+
+
+def sigma_fetch(s: Settings) -> dict:
+    """Download the SigmaHQ rules privasoc can normalise (DRL 1.1: kept out of git)."""
+    import io
+    import shutil
+    import tarfile
+
+    import httpx
+
+    url = f"https://codeload.github.com/SigmaHQ/sigma/tar.gz/refs/tags/{SIGMA_TAG}"
+    try:
+        resp = httpx.get(url, timeout=120, follow_redirects=True)
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise ActionError(f"cannot download SigmaHQ rules: {exc}") from exc
+    dest = s.sigma_dir
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    n = 0
+    with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+        for m in tar.getmembers():
+            rel = m.name.split("/", 1)[1] if "/" in m.name else ""
+            wanted = rel == "LICENSE" or any(rel.startswith(d + "/") for d in SIGMA_DIRS)
+            if not wanted or not m.isfile() or ".." in rel or rel.startswith("/"):
+                continue
+            target = dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(tar.extractfile(m).read())
+            n += rel.endswith(".yml")
+    (dest / "SOURCE").write_text(f"SigmaHQ {SIGMA_TAG}, Detection Rule License 1.1\n")
+    eng = engine(s, reload=True)
+    return {"files": n, "tag": SIGMA_TAG, **eng.stats()}
+
+
+def find_rule(s: Settings, rule_id: str):
+    return next((r for r in engine(s).rules if r.id == rule_id), None)
+
+
+def detect_run(store: Store, s: Settings) -> dict:
+    """One detection pass: Sigma on new events, host alerts, pending notifications."""
+    from privasoc.detect import alerts as al
+    from privasoc.detect.engine import host_alerts
+
+    out = engine(s).run(store, dedup_minutes=s.alert_dedup_minutes)
+    out["host_alerts"] = host_alerts(store, host_health, s.alert_dedup_minutes)
+    out.update(
+        al.notify_pending(store, s.notify_url, s.notify_format, s.notify_min_level, s.public_url)
+    )
+    return out
+
+
+def set_alert_status(store: Store, aid: int, status: str) -> dict:
+    from privasoc.detect import alerts as al
+
+    if not al.alert(store, aid):
+        raise ActionError(f"unknown alert {aid}")
+    try:
+        al.set_status(store, aid, status)
+    except ValueError as exc:
+        raise ActionError(str(exc)) from exc
+    return al.alert(store, aid)
+
+
+def triage_alert(
+    store: Store,
+    s: Settings,
+    aid: int,
+    provider: str = "local",
+    progress: Callable[[str], None] | None = None,
+) -> dict:
+    """AI triage of one alert on pseudonymised evidence (D53)."""
+    import httpx
+
+    from privasoc.detect import alerts as al
+    from privasoc.detect import triage
+    from privasoc.llm import LeakError, LLMClient
+
+    say = progress or (lambda _m: None)
+    a = al.alert(store, aid)
+    if not a:
+        raise ActionError(f"unknown alert {aid}")
+    if provider not in {"local", "remote"}:
+        raise ActionError("provider must be local or remote")
+    if provider == "remote" and not s.llm_remote_url:
+        raise ActionError("no remote API configured (PRIVASOC_LLM_REMOTE_URL)")
+    events = al.alert_events(store, aid, triage.MAX_EVENTS)
+    rule = find_rule(s, a["rule_id"])
+    pz = pseudonymizer(s)
+    try:
+        if provider == "remote" and s.remote_residual_pass:
+            raw = [str((e["ecs"].get("event") or {}).get("original") or "") for e in events]
+            pz = pz.with_rules(_local_residual_rules(store, s, [x for x in raw if x], say))
+        llm = LLMClient(
+            _endpoint(s, provider),
+            call_log=store.log_llm_call,
+            timeout=s.llm_timeout,
+            max_tokens=s.llm_max_tokens,
+            num_ctx=s.llm_num_ctx,
+        )
+        try:
+            llm.check()
+        except RuntimeError as exc:
+            raise ActionError(str(exc)) from exc
+        say(f"{len(events)} event(s), asking the {provider} model")
+        try:
+            rec = triage.triage(a, rule, events, llm, pz)
+        except LeakError as exc:
+            raise ActionError(f"refused by the leak guard: {exc}") from exc
+        except httpx.HTTPError as exc:
+            raise ActionError(f"LLM error: {exc}") from exc
+    finally:
+        pz.vault.close()
+    from privasoc.store import utcnow
+
+    rec["at"] = utcnow()
+    al.save_triage(store, aid, rec)
+    say(
+        f"verdict {rec['result']['verdict'] if rec['result'] else '?'}; "
+        f"{len(rec['problems'])} problem(s)"
+    )
+    return rec
+
+
+def reidentify(s: Settings, text: str) -> str:
+    """Pseudonyms back to real values, for display on this machine only."""
+    pz = pseudonymizer(s)
+    try:
+        return pz.reidentify(text)
+    finally:
+        pz.vault.close()
+
+
+def reidentify_obj(s: Settings, obj):
+    """Same as `reidentify`, on every string of a JSON-like structure (keeps it valid)."""
+    pz = pseudonymizer(s)
+
+    def walk(x):
+        if isinstance(x, str):
+            return pz.reidentify(x)
+        if isinstance(x, list):
+            return [walk(v) for v in x]
+        if isinstance(x, dict):
+            return {k: walk(v) for k, v in x.items()}
+        return x
+
+    try:
+        return walk(obj)
+    finally:
+        pz.vault.close()

@@ -65,6 +65,20 @@ def serve() -> None:
 
     s = get_settings()
     vectorgen.write(Store(s.db_path).parsers("approved"), s.vector_dir)
+    if s.detect_interval > 0:  # step 6: detection in the background, own connection
+        import threading
+        import time
+
+        def loop() -> None:
+            store = Store(s.db_path)
+            while True:
+                try:
+                    service.detect_run(store, s)
+                except Exception as exc:  # noqa: BLE001 - keep detecting, report it
+                    typer.echo(f"detection error: {exc}", err=True)
+                time.sleep(s.detect_interval)
+
+        threading.Thread(target=loop, name="privasoc-detect", daemon=True).start()
     uvicorn.run(create_app(s), host=s.host, port=s.port)
 
 
@@ -284,6 +298,113 @@ def rules_approve(rule_id: str) -> None:
 def rules_reject(rule_id: str) -> None:
     r = _do(service.set_rule_status, get_settings(), rule_id, "rejected")
     typer.echo(f"{r.id} rejected: it will not be proposed again")
+
+
+sigma_app = typer.Typer(help="Sigma rules (step 6, D50).", no_args_is_help=True)
+app.add_typer(sigma_app, name="sigma")
+alerts_app = typer.Typer(help="Alerts and AI triage (step 6, D52, D53).", no_args_is_help=True)
+app.add_typer(alerts_app, name="alerts")
+
+
+@sigma_app.command("fetch")
+def sigma_fetch() -> None:
+    """Download the SigmaHQ rules privasoc can normalise (kept out of git, DRL 1.1)."""
+    r = _do(service.sigma_fetch, get_settings())
+    typer.echo(
+        f"SigmaHQ {r['tag']}: {r['files']} rule files; {r['supported']}/{r['rules']} rules "
+        f"supported (including privasoc's own), {r['correlations']} correlations"
+    )
+
+
+@sigma_app.command("list")
+def sigma_list(
+    unsupported: Annotated[bool, typer.Option(help="Only rules the engine cannot run")] = False,
+) -> None:
+    for r in service.engine(get_settings()).rules:
+        if unsupported and r.unsupported is None:
+            continue
+        state = "ok" if r.unsupported is None else f"unsupported: {r.unsupported}"
+        typer.echo(f"{r.level:13} {r.origin:8} {r.title[:60]:60} {state}")
+
+
+@app.command()
+def detect() -> None:
+    """Run detection once on the events stored since the last run."""
+    s = get_settings()
+    r = service.detect_run(Store(s.db_path), s)
+    typer.echo(
+        f"{r['events']} events, {r['matches']} matches, {r['new_alerts']} new Sigma alerts, "
+        f"{r['host_alerts']} host alerts, {r['sent']} notifications sent"
+    )
+
+
+@alerts_app.command("list")
+def alerts_list(status: str = "open") -> None:
+    from privasoc.detect import alerts as al
+
+    rows = al.alerts(Store(get_settings().db_path), None if status == "all" else status)
+    if not rows:
+        typer.echo("No alert.")
+    for a in rows:
+        verdict = (a["triage"] or {}).get("result") or {}
+        typer.echo(
+            f"#{a['id']:<5} {a['level']:13} {a['status']:12} x{a['count']:<4} "
+            f"{a['source'][:24]:24} {a['title'][:60]}"
+            + (f"  [AI: {verdict.get('verdict')}]" if verdict else "")
+        )
+
+
+@alerts_app.command("show")
+def alerts_show(alert_id: int) -> None:
+    """An alert, its rule, its events and the latest triage (re-identified locally)."""
+    import json
+
+    from privasoc.detect import alerts as al
+
+    s = get_settings()
+    store = Store(s.db_path)
+    a = al.alert(store, alert_id)
+    if not a:
+        raise typer.BadParameter("unknown alert")
+    typer.echo(f"#{a['id']} {a['level']} {a['status']} {a['title']}  ({a['kind']}, x{a['count']})")
+    rule = service.find_rule(s, a["rule_id"])
+    if rule:
+        typer.echo(f"rule: {rule.title} [{rule.licence()}] {', '.join(rule.attack)}")
+    for e in al.alert_events(store, alert_id, 10):
+        typer.echo(f"  event {e['id']}: {(e['ecs'].get('event') or {}).get('original', '')[:160]}")
+    if a["triage"]:
+        typer.echo(json.dumps(service.reidentify_obj(s, a["triage"]), indent=2))
+
+
+@alerts_app.command("triage")
+def alerts_triage(alert_id: int, provider: str = "local") -> None:
+    """AI triage on pseudonymised evidence; the analyst decides."""
+    import json
+
+    s = get_settings()
+    rec = _do(
+        service.triage_alert, Store(s.db_path), s, alert_id, provider,
+        progress=lambda m: typer.echo(f"  {m}"),
+    )  # fmt: skip
+    typer.echo(json.dumps(service.reidentify_obj(s, rec), indent=2))
+
+
+@alerts_app.command("close")
+def alerts_close(
+    alert_id: int,
+    verdict: Annotated[str, typer.Argument(help="tp (true positive) or fp (false positive)")],
+) -> None:
+    status = {"tp": "closed_tp", "fp": "closed_fp"}.get(verdict)
+    if not status:
+        raise typer.BadParameter("verdict is tp or fp")
+    _do(service.set_alert_status, Store(get_settings().db_path), alert_id, status)
+    typer.echo(f"#{alert_id} {status}")
+
+
+@alerts_app.command("ack")
+def alerts_ack(alert_id: int) -> None:
+    _do(service.set_alert_status, Store(get_settings().db_path), alert_id, "acknowledged")
+    typer.echo(f"#{alert_id} acknowledged")
 
 
 parsers_app = typer.Typer(help="Review AI-generated parsers (D23).", no_args_is_help=True)

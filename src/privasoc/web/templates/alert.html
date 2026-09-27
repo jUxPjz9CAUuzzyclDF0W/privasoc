@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, post, host_link, parser_link with context %}
+{% block title %}Alert #{{ a.id }} · privasoc{% endblock %}
+{% block content %}
+<h1>#{{ a.id }} {{ a.title }} {{ badge(a.level) }} {{ badge(a.status) }}</h1>
+<p class="muted">{{ a.kind }} · host {{ host_link(a.source) }} · {{ a.count }} occurrence(s) · first {{ a.first_seen[:19] }} · last {{ a.last_seen[:19] }}</p>
+
+<div class="panel">
+  <div class="actions">
+    {% if a.status == "new" %}{{ post("/ui/alert/status", "Acknowledge", {"id": a.id, "status": "acknowledged"}) }}{% endif %}
+    {% if a.status not in ["closed_tp", "closed_fp"] %}
+    {{ post("/ui/alert/status", "Close: true positive", {"id": a.id, "status": "closed_tp"}, "danger") }}
+    {{ post("/ui/alert/status", "Close: false positive", {"id": a.id, "status": "closed_fp"}) }}
+    {% else %}{{ post("/ui/alert/status", "Reopen", {"id": a.id, "status": "new"}) }}{% endif %}
+  </div>
+  <p class="muted">Your closing verdict is kept: it is what the AI triage is measured against.</p>
+</div>
+
+{% if rule %}
+<h2>Rule</h2>
+<div class="panel">
+  <p><strong>{{ rule.title }}</strong> {{ badge(rule.level) }} <span class="muted">{{ rule.licence() }}{% if rule.author %} · {{ rule.author }}{% endif %} · <code>{{ rule.path }}</code></span></p>
+  {% if rule.description %}<p>{{ rule.description }}</p>{% endif %}
+  {% if rule.falsepositives %}<p class="muted">Known false positives: {{ rule.falsepositives|join("; ") }}</p>{% endif %}
+  {% if rule.attack %}<p>ATT&amp;CK: {% for t in rule.attack %}<code>{{ t }}</code> {% endfor %}</p>{% endif %}
+</div>
+{% endif %}
+{% if a.detail %}<details><summary>Detail</summary><div class="panel"><pre>{{ a.detail|pretty }}</pre></div></details>{% endif %}
+
+<h2>AI triage</h2>
+<div class="panel">
+  <form method="post" action="/ui/alert/triage" class="actions">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="id" value="{{ a.id }}">
+    <select name="provider"><option value="local">local model</option>{% if remote %}<option value="remote">remote API (pseudonymised)</option>{% endif %}</select>
+    <button class="primary">{% if triage %}Triage again{% else %}Triage this alert{% endif %}</button>
+  </form>
+  <p class="muted">The model sees the rule and up to 20 events, pseudonymised. It suggests; you decide.</p>
+  {% if triage %}{% set t = triage.result %}
+  <p class="muted">{{ triage.provider }}:{{ triage.model }} · {{ triage.at[:19] }} · {{ triage.events }} events · {{ triage.pseudonymised_values }} values pseudonymised · {{ triage.latency_s }} s</p>
+  {% if triage.problems %}<div class="flash error">Checks failed: {% for p in triage.problems %}<div>{{ p }}</div>{% endfor %}</div>{% endif %}
+  {% if t %}
+  <p>{{ badge(t.verdict) }} severity {{ badge(t.severity) }} · confidence {{ "%.0f%%"|format(t.confidence * 100) }}</p>
+  <p>{{ t.summary }}</p>
+  {% if t.reasons %}<h2>Reasons</h2><ul>{% for r in t.reasons %}<li>{{ r.claim }} {% for e in r.events %}<a href="#ev-{{ e }}">event {{ e }}</a> {% endfor %}{% if r.flag %}<span class="flagged">({{ r.flag }})</span>{% endif %}</li>{% endfor %}</ul>{% endif %}
+  {% if t.next_steps %}<h2>Next steps</h2><ol>{% for n in t.next_steps %}<li>{{ n }}</li>{% endfor %}</ol>{% endif %}
+  {% if t.attack %}<p>ATT&amp;CK: {% for x in t.attack %}<code>{{ x.id }}</code>{% if not x.in_rule_tags %} <span class="flagged">(not in the rule's tags)</span>{% endif %} {% endfor %}</p>{% endif %}
+  {% endif %}
+  {% endif %}
+</div>
+
+<h2>Events ({{ events|length }}{% if a.count > events|length %} of {{ a.count }}{% endif %})</h2>
+<div class="panel">
+{% if events %}<table>
+<tr><th>#</th><th>Received</th><th>Parser</th><th>Event</th></tr>
+{% for e in events %}
+<tr id="ev-{{ e.id }}"><td>{{ e.id }}</td><td>{{ e.received_at[:19] }}</td><td>{{ parser_link(e.parser_id) }}</td>
+<td><details><summary>{{ ((e.ecs.event or {}).original or "")[:140] }}</summary><pre>{{ e.ecs|pretty }}</pre></details></td></tr>
+{% endfor %}</table>
+{% else %}<p class="muted">No event linked (health or new-sender alert).</p>{% endif %}
+</div>
+{% endblock %}

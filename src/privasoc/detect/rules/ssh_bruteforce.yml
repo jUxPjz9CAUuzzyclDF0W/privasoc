@@ -1,0 +1,40 @@
+title: SSH authentication failure
+name: privasoc_ssh_auth_failure
+id: 6d7b0a52-3c1e-4a0f-9b1e-2f6a8c1d0001
+status: experimental
+description: One failed SSH authentication (base rule of the brute-force correlation).
+author: privasoc
+logsource:
+  product: privasoc
+detection:
+  process:
+    process.name|contains: sshd
+  failure:
+    event.original|contains:
+      - Failed password
+      - Failed publickey
+      - Invalid user
+      - authentication failure
+  condition: process and failure
+level: low
+---
+title: SSH brute force from one source
+id: 6d7b0a52-3c1e-4a0f-9b1e-2f6a8c1d0002
+status: experimental
+description: At least 10 failed SSH authentications from the same source address within 5 minutes.
+author: privasoc
+correlation:
+  type: event_count
+  rules:
+    - privasoc_ssh_auth_failure
+  group-by:
+    - source.ip
+  timespan: 5m
+  condition:
+    gte: 10
+falsepositives:
+  - A user or script retrying with a wrong password or key
+level: high
+tags:
+  - attack.credential-access
+  - attack.t1110

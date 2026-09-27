@@ -64,6 +64,38 @@ CREATE TABLE IF NOT EXISTS health_history (
     status      TEXT NOT NULL,
     reasons     TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sigma_matches (  -- step 6: which rule matched which event
+    rule_id     TEXT NOT NULL,
+    event_id    INTEGER NOT NULL,
+    at          TEXT NOT NULL,              -- event time (UTC ISO)
+    PRIMARY KEY (rule_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS sigma_matches_time ON sigma_matches(rule_id, at);
+CREATE TABLE IF NOT EXISTS alerts (         -- D52
+    id          INTEGER PRIMARY KEY,
+    kind        TEXT NOT NULL,              -- sigma | health | host
+    rule_id     TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    level       TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    group_key   TEXT NOT NULL DEFAULT '',
+    first_seen  TEXT NOT NULL,
+    last_seen   TEXT NOT NULL,
+    count       INTEGER NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL DEFAULT 'new', -- new | acknowledged | closed_tp | closed_fp
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    detail      TEXT,                       -- JSON: reasons, group values
+    triage      TEXT,                       -- JSON: latest AI triage (pseudonymised)
+    notified    INTEGER NOT NULL DEFAULT 0  -- 0 pending, 1 sent, -1 failed, 2 below level
+);
+CREATE INDEX IF NOT EXISTS alerts_open ON alerts(status, kind, rule_id, source);
+CREATE TABLE IF NOT EXISTS alert_events (
+    alert_id    INTEGER NOT NULL,
+    event_id    INTEGER NOT NULL,
+    PRIMARY KEY (alert_id, event_id)
+);
+CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS llm_calls (
     id          INTEGER PRIMARY KEY,
     at          TEXT NOT NULL,

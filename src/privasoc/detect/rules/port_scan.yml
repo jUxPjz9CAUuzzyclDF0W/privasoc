@@ -1,0 +1,47 @@
+title: Connection blocked by a firewall
+name: privasoc_firewall_block
+id: 6d7b0a52-3c1e-4a0f-9b1e-2f6a8c1d0003
+status: experimental
+description: A connection a firewall dropped, denied, blocked or rejected (base rule of the port scan correlation).
+author: privasoc
+logsource:
+  product: privasoc
+detection:
+  port:
+    destination.port|exists: true
+  action_field:
+    event.action:
+      - 'drop*'
+      - 'deny*'
+      - 'block*'
+      - 'reject*'
+  action_text:
+    event.original|contains:
+      - ' DROP'
+      - 'DENY'
+      - 'BLOCK'
+      - 'REJECT'
+  condition: port and 1 of action_*
+level: informational
+---
+title: Port scan from one source
+id: 6d7b0a52-3c1e-4a0f-9b1e-2f6a8c1d0004
+status: experimental
+description: One source address was blocked on at least 20 different destination ports within 2 minutes.
+author: privasoc
+correlation:
+  type: value_count
+  rules:
+    - privasoc_firewall_block
+  group-by:
+    - source.ip
+  timespan: 2m
+  condition:
+    field: destination.port
+    gte: 20
+falsepositives:
+  - Vulnerability scanners you run yourself
+level: medium
+tags:
+  - attack.discovery
+  - attack.t1046

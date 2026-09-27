@@ -3,6 +3,7 @@
 {% block content %}
 <h1>Dashboard</h1>
 <div class="cards">
+  <a class="card" href="/ui/alerts"><div class="n {% if alert_counts.critical or alert_counts.high %}critical{% endif %}">{{ alert_counts.open }}</div><div class="l">open alerts ({{ alert_counts.critical }} critical, {{ alert_counts.high }} high)</div></a>
   <a class="card" href="/ui/hosts"><div class="n">{{ summary.hosts_pending }}</div><div class="l">hosts waiting for approval</div></a>
   <a class="card" href="/ui/hosts"><div class="n">{{ summary.hosts_approved }}</div><div class="l">approved hosts</div></a>
   <a class="card" href="/ui/parsers?status=proposed"><div class="n">{{ summary.parsers_proposed }}</div><div class="l">parsers to review</div></a>

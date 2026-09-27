@@ -249,3 +249,27 @@ def test_pseudonymisation_rules_page(tmp_path):
         "/ui/rules/add", data={"rtype": "key", "kind": "user", "pattern": "msg", "csrf": csrf(c)}
     )
     assert "level=error" in bad.headers["location"]
+
+
+def test_alerts_pages_and_analyst_verdict(tmp_path):
+    from privasoc import service
+    from tests.test_detect import ev, ssh_fail
+
+    c, store = make(tmp_path)
+    store.ingest([ev(i, ssh_fail("203.0.113.9", i)) for i in range(12)], auto_approve=True)
+    login(c)
+    service._ENGINE.clear()
+    r = c.post("/ui/detection/run", data={"csrf": csrf(c)})
+    assert r.status_code == 303 and "1+new" in r.headers["location"]
+    page = c.get("/ui/alerts").text
+    assert "SSH brute force from one source" in page
+    aid = re.search(r'/ui/alert\?id=(\d+)">SSH', page).group(1)
+    detail = c.get("/ui/alert", params={"id": aid}).text
+    assert "MIT (privasoc)" in detail and "T1110" in detail and "Triage this alert" in detail
+    assert detail.count('id="ev-') == 12
+    r = c.post("/ui/alert/status", data={"id": aid, "status": "closed_fp", "csrf": csrf(c)})
+    assert r.status_code == 303 and "closed+fp" in r.headers["location"]
+    assert "closed_fp" in c.get("/ui/alerts", params={"status": "all"}).text
+    det = c.get("/ui/detection", params={"show": "all"}).text
+    assert "Port scan from one source" in det and "not installed yet" in det
+    assert "open alerts" in c.get("/ui/").text

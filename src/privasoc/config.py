@@ -46,6 +46,18 @@ class Settings(BaseSettings):
     learn_think: bool = False
     learn_max_tokens: int = 2048
 
+    # Step 6: detection, alerts, notifications (D50-D53)
+    detect_interval: int = 60  # seconds between detection runs inside `serve` (0 = off)
+    alert_dedup_minutes: int = 60
+    notify_url: str = ""  # one webhook; empty = no notification
+    notify_format: str = "json"  # json | ntfy | discord | slack
+    notify_min_level: str = "high"
+    public_url: str = ""  # e.g. http://privasoc.lab:8000, only used for links in notifications
+
+    @property
+    def sigma_dir(self) -> Path:
+        return self.data_dir / "sigma"
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "privasoc.db"

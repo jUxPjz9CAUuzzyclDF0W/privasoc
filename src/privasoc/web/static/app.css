@@ -63,3 +63,10 @@ details summary { cursor: pointer; color: var(--accent); }
 .login { max-width: 380px; margin: 12vh auto; }
 .login input { width: 100%; margin: 8px 0 12px; }
 .htmx-request .spin::after { content: " ..."; }
+.informational { color: var(--muted); }
+.low { color: var(--accent); }
+.medium, .acknowledged, .needs_more_info { color: var(--warn); }
+.high, .closed_tp, .true_positive { color: var(--crit); }
+.new { color: var(--accent); }
+.closed_fp, .benign, .false_positive { color: var(--ok); }
+.flagged { color: var(--crit); font-size: .85rem; }

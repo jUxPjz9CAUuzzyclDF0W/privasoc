@@ -154,6 +154,9 @@ def create_router(settings: Settings, store: Store, lock: threading.RLock) -> AP
             summary = store.summary()
             hosts = health_rows()
             proposed = store.parsers("proposed")
+            from privasoc.detect import alerts as al
+
+            alert_counts = al.counts(store)
         return page(
             request,
             "dashboard.html",
@@ -162,6 +165,7 @@ def create_router(settings: Settings, store: Store, lock: threading.RLock) -> AP
             unhealthy=[h for h in hosts if h["health"] and h["health"]["status"] != "ok"],
             proposed=proposed,
             rules_proposed=len(service.list_rules(settings, "proposed")),
+            alert_counts=alert_counts,
         )
 
     # ------------------------------------------------------------------ hosts (D45, D47)
@@ -415,6 +419,103 @@ def create_router(settings: Settings, store: Store, lock: threading.RLock) -> AP
     @router.post("/rule/reject", dependencies=post)
     def rule_reject(id: Annotated[str, Form()]) -> Response:  # noqa: A002
         return rule_decision(id, "rejected")
+
+    # ------------------------------------------------------------------ alerts (step 6)
+
+    @router.get("/alerts", dependencies=auth)
+    def alerts_page(request: Request, status: str = "open", level: str = "") -> HTMLResponse:
+        from privasoc.detect import alerts as al
+
+        with lock:
+            rows = al.alerts(store, None if status == "all" else status, level or None)
+            counts = al.counts(store)
+        return page(request, "alerts.html", alerts=rows, status=status, level=level, counts=counts)
+
+    @router.get("/alert", dependencies=auth)
+    def alert_page(request: Request, id: int) -> HTMLResponse:  # noqa: A002
+        from privasoc.detect import alerts as al
+
+        with lock:
+            a = al.alert(store, id)
+            if not a:
+                raise HTTPException(status_code=404, detail="unknown alert")
+            events = al.alert_events(store, id, 50)
+        rule = service.find_rule(settings, a["rule_id"])
+        triage = service.reidentify_obj(settings, a["triage"]) if a["triage"] else None
+        return page(
+            request, "alert.html", a=a, events=events, rule=rule, triage=triage,
+            remote=bool(settings.llm_remote_url),
+        )  # fmt: skip
+
+    def alert_url(aid) -> str:
+        return f"/ui/alert?id={int(aid)}"
+
+    @router.post("/alert/status", dependencies=post)
+    def alert_status(id: Annotated[int, Form()], status: Annotated[str, Form()]) -> Response:  # noqa: A002
+        try:
+            with lock:
+                service.set_alert_status(store, id, status)
+        except service.ActionError as exc:
+            return back(alert_url(id), str(exc), "error")
+        return back(alert_url(id), f"alert #{id}: {status.replace('_', ' ')}")
+
+    @router.post("/alert/triage", dependencies=post)
+    def alert_triage(
+        id: Annotated[int, Form()],  # noqa: A002
+        provider: Annotated[str, Form()] = "local",
+    ) -> Response:
+        def work(say):
+            job_store = Store(store.path)
+            try:
+                rec = service.triage_alert(job_store, settings, id, provider, say)
+                return {
+                    "alert": id,
+                    "verdict": (rec["result"] or {}).get("verdict"),
+                    "problems": len(rec["problems"]),
+                }
+            finally:
+                job_store.close()
+
+        try:
+            job = jobs.start("triage", str(id), work)
+        except RuntimeError as exc:
+            return back(alert_url(id), str(exc), "error")
+        return RedirectResponse(f"/ui/job?id={job.id}", status_code=303)
+
+    @router.get("/detection", dependencies=auth)
+    def detection_page(request: Request, show: str = "") -> HTMLResponse:
+        eng = service.engine(settings)
+        rules = eng.rules if show == "all" else [r for r in eng.rules if r.unsupported]
+        fetched = (settings.sigma_dir / "SOURCE").exists()
+        return page(
+            request,
+            "detection.html",
+            stats=eng.stats(),
+            rules=rules,
+            show=show,
+            fetched=fetched,
+            tag=service.SIGMA_TAG,
+        )
+
+    @router.post("/detection/run", dependencies=post)
+    def detection_run() -> Response:
+        with lock:
+            r = service.detect_run(store, settings)
+        return back(
+            "/ui/alerts",
+            f"{r['events']} new events checked, {r['new_alerts']} new "
+            f"Sigma alert(s), {r['host_alerts']} host alert(s)",
+        )
+
+    @router.post("/detection/fetch", dependencies=post)
+    def detection_fetch() -> Response:
+        try:
+            r = service.sigma_fetch(settings)
+        except service.ActionError as exc:
+            return back("/ui/detection", str(exc), "error")
+        return back(
+            "/ui/detection", f"SigmaHQ {r['tag']}: {r['supported']}/{r['rules']} rules supported"
+        )
 
     # ------------------------------------------------------------------ data
 

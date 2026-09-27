@@ -1,0 +1,17 @@
+title: DNS query with a very long label
+id: 6d7b0a52-3c1e-4a0f-9b1e-2f6a8c1d0007
+status: experimental
+description: A DNS name with a label of 50 characters or more, typical of data carried in DNS queries (tunnelling, exfiltration).
+author: privasoc
+logsource:
+  product: privasoc
+detection:
+  selection:
+    dns.question.name|re: '(^|\.)[A-Za-z0-9-]{50,}\.'
+  condition: selection
+falsepositives:
+  - Some CDNs and anti-virus products encode lookups in long labels
+level: medium
+tags:
+  - attack.command-and-control
+  - attack.t1071.004
