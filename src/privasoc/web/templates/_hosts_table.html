@@ -1,0 +1,24 @@
+{% from "_macros.html" import badge, post, host_link with context %}
+<div id="hosts-table" hx-get="/ui/hosts/table" hx-trigger="every 30s" hx-swap="outerHTML">
+{% if hosts %}
+<table>
+<tr><th>Host</th><th>Status</th><th>Format</th><th class="num">Lines</th><th>Last seen</th><th>Health</th><th></th></tr>
+{% for h in hosts %}
+<tr>
+  <td>{{ host_link(h.source) }}</td>
+  <td>{{ badge(h.status) }}</td>
+  <td><code>{{ h.format or "-" }}</code></td>
+  <td class="num">{{ h.lines }}</td>
+  <td>{{ h.last_seen[:19] }}</td>
+  <td>{% if h.health %}{{ badge(h.health.status) }} <span class="muted">{{ h.health.reasons|join("; ") }}</span>{% else %}-{% endif %}</td>
+  <td>{% if h.status != "approved" %}<div class="actions">
+    {{ post("/ui/host/approve", "Approve", {"source": h.source}, "primary") }}
+    {% if h.status == "pending" %}{{ post("/ui/host/reject", "Reject", {"source": h.source}, "danger") }}{% endif %}
+  </div>{% endif %}</td>
+</tr>
+{% endfor %}
+</table>
+{% else %}
+<p class="muted">No host yet: point a device at privasoc (syslog on port 5514) or import a file.</p>
+{% endif %}
+</div>

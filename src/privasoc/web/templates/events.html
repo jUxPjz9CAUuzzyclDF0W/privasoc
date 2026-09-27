@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% from "_macros.html" import host_link, parser_link %}
+{% block title %}Events · privasoc{% endblock %}
+{% block content %}
+<h1>Events</h1>
+<form method="get" action="/ui/events" class="actions panel">
+  <label>Source <select name="source"><option value="">all</option>
+  {% for s in sources %}<option value="{{ s }}" {% if s == source %}selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select></label>
+  <label>Limit <input name="limit" value="{{ limit }}" size="4" inputmode="numeric"></label>
+  <button>Show</button>
+</form>
+<div class="panel">
+{% if events %}<table>
+<tr><th>Received</th><th>Source</th><th>Parser</th><th>Event</th></tr>
+{% for e in events %}{% set ev = e.ecs.event if e.ecs.event is mapping else {} %}
+<tr><td>{{ e.received_at[:19] }}</td><td>{{ host_link(e.source) }}</td><td>{{ parser_link(e.parser_id) }}</td>
+<td><details><summary>{{ ev.action or ev.category or "" }}
+  {% if e.ecs.source is mapping and e.ecs.source.ip %}{{ e.ecs.source.ip }}{% endif %}
+  {% if e.ecs.destination is mapping and e.ecs.destination.ip %} → {{ e.ecs.destination.ip }}{% endif %}
+  {% if e.ecs.message %}{{ e.ecs.message[:120] }}{% endif %}</summary>
+<pre>{{ e.ecs|pretty }}</pre></details></td></tr>
+{% endfor %}</table>
+{% else %}<p class="muted">No event yet.</p>{% endif %}
+</div>
+{% endblock %}

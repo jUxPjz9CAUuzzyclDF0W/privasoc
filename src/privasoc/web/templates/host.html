@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, post, parser_link with context %}
+{% block title %}{{ host.source }} · privasoc{% endblock %}
+{% block content %}
+<h1>{{ host.source }} {{ badge(host.status) }}</h1>
+<p class="muted">first seen {{ host.first_seen[:19] }} · last seen {{ host.last_seen[:19] }} ·
+{{ host.lines }} lines · format <code>{{ host.format or "-" }}</code></p>
+
+{% if host.status != "approved" %}
+<div class="panel">
+  <p>{% if host.status == "pending" %}This sender is new. Its lines are held: not ingested and never
+  sent to any model until you approve it.{% else %}This sender was rejected: its lines are dropped.{% endif %}
+  On approval, privasoc first tries Vector's built-in parsers; only an unknown format goes to the
+  LLM path.</p>
+  <div class="actions">
+    {{ post("/ui/host/approve", "Approve this host", {"source": host.source}, "primary") }}
+    {% if host.status == "pending" %}{{ post("/ui/host/reject", "Reject", {"source": host.source}, "danger") }}{% endif %}
+  </div>
+</div>
+{% if held %}
+<h2>Latest held lines <span class="muted">({% if raw %}raw{% else %}pseudonymised{% endif %})</span>
+  <a href="/ui/host?source={{ host.source|q }}{% if not raw %}&raw=1{% endif %}">{% if raw %}hide raw{% else %}show raw{% endif %}</a></h2>
+<div class="panel lines">{% for l in held %}<pre>{{ l }}</pre>{% endfor %}</div>
+{% endif %}
+{% endif %}
+
+{% if health %}
+<h2>Health {{ badge(health.status) }}</h2>
+<div class="grid2">
+  <div class="panel">
+    {% if health.reasons %}<ul>{% for r in health.reasons %}<li>{{ r }}</li>{% endfor %}</ul>{% else %}<p>No problem detected.</p>{% endif %}
+    <table>{% for k, v in health.metrics.items() %}<tr><th>{{ k }}</th><td class="num">{{ v }}</td></tr>{% endfor %}</table>
+  </div>
+  <div class="panel">
+    <form method="post" action="/ui/host/thresholds">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="source" value="{{ host.source }}">
+      <div class="form-grid">
+        <strong>threshold</strong><strong>override</strong><strong class="muted">default</strong>
+        {% for k, v in defaults.items() %}
+        <label for="t-{{ k }}">{{ k }}</label>
+        <input id="t-{{ k }}" name="{{ k }}" value="{{ host.thresholds.get(k, '') }}" inputmode="decimal">
+        <span class="muted">{{ v }}</span>
+        {% endfor %}
+      </div>
+      <p><button>Save thresholds</button> <span class="muted">empty = default</span></p>
+    </form>
+  </div>
+</div>
+{% if history %}
+<details><summary>Health history ({{ history|length }} changes)</summary>
+<div class="panel"><table>
+{% for at, st, reasons in history %}<tr><td>{{ at[:19] }}</td><td>{{ badge(st) }}</td><td>{{ reasons|join("; ") }}</td></tr>{% endfor %}
+</table></div></details>
+{% endif %}
+{% endif %}
+
+{% if host.status == "approved" %}
+<h2>Quarantine: {{ qcount }} lines no parser recognises</h2>
+{% if qcount %}
+<div class="panel">
+  <form method="post" action="/ui/host/propose" class="actions">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="source" value="{{ host.source }}">
+    <label>Model <select name="provider">
+      <option value="local">local</option>
+      {% if remote %}<option value="remote">remote API (pseudonymised samples)</option>{% endif %}
+    </select></label>
+    <label>Mode <select name="mode">
+      <option value="structured" {% if mode == "structured" %}selected{% endif %}>structured</option>
+      <option value="vrl" {% if mode == "vrl" %}selected{% endif %}>free-form VRL</option>
+    </select></label>
+    <button class="primary">Propose a parser</button>
+  </form>
+  <p class="muted">Samples are pseudonymised before any model sees them. The proposal is only a
+  proposal: nothing is deployed until you approve it.</p>
+</div>
+<p>Latest lines ({% if raw %}raw{% else %}pseudonymised{% endif %})
+  <a href="/ui/host?source={{ host.source|q }}{% if not raw %}&raw=1{% endif %}">{% if raw %}hide raw{% else %}show raw{% endif %}</a></p>
+<div class="panel lines">{% for l in quarantined %}<pre>{{ l }}</pre>{% endfor %}</div>
+{% endif %}
+{% endif %}
+
+{% if parsers %}
+<h2>Parsers for this host</h2>
+<div class="panel"><table>
+<tr><th>Parser</th><th>Status</th><th>Model</th><th>Created</th><th>Reason</th></tr>
+{% for p in parsers|reverse %}
+<tr><td>{{ parser_link(p.id) }}</td><td>{{ badge(p.status) }}</td><td>{{ p.provider }}:{{ p.model }}</td><td>{{ p.created_at[:19] }}</td><td>{{ p.report.reason }}</td></tr>
+{% endfor %}
+</table></div>
+{% endif %}
+{% endblock %}

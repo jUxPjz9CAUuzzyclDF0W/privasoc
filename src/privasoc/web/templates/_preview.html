@@ -1,0 +1,14 @@
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+{% if items %}
+<div class="panel">
+{% if live %}<p class="muted">Run just now on {{ items|length }} of the latest quarantined lines:
+{{ items|selectattr("ecs")|list|length }} parsed.</p>{% else %}<p class="muted">Recorded when the parser was generated.</p>{% endif %}
+<table>
+<tr><th>Raw line</th><th>ECS output</th></tr>
+{% for it in items %}
+<tr><td><pre>{{ it.raw }}</pre></td>
+<td>{% if it.ecs is not none %}<pre>{{ it.ecs|pretty }}</pre>{% else %}<span class="error">{{ it.error or "not parsed" }}</span>{% endif %}</td></tr>
+{% endfor %}
+</table>
+</div>
+{% elif not error %}<p class="muted">{% if live %}The quarantine of this host is empty.{% else %}No preview recorded.{% endif %}</p>{% endif %}

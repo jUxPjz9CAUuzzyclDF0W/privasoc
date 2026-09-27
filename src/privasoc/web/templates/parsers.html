@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, host_link, parser_link %}
+{% block title %}Parsers · privasoc{% endblock %}
+{% block content %}
+<h1>Parsers</h1>
+<p class="actions">
+  {% for s in ["", "proposed", "approved", "rejected", "needs_escalation", "failed", "superseded"] %}
+  <a href="/ui/parsers{% if s %}?status={{ s }}{% endif %}" {% if s == status %}class="badge"{% endif %}>{{ s or "all" }}</a>
+  {% endfor %}
+</p>
+<div class="panel">
+{% if parsers %}<table>
+<tr><th>Parser</th><th>Status</th><th>Source</th><th>Model</th><th class="num">Attempts</th><th class="num">Coverage</th><th>Created</th></tr>
+{% for p in parsers %}{% set m = p.report.metrics or {} %}
+<tr><td>{{ parser_link(p.id) }}</td><td>{{ badge(p.status) }}</td><td>{{ host_link(p.source) }}</td>
+<td>{{ p.provider }}:{{ p.model }}</td><td class="num">{{ m.attempts or "-" }}</td>
+<td class="num">{% if m.line_coverage is defined %}{{ "%.0f%%"|format(m.line_coverage * 100) }}{% elif m.coverage_recent is defined %}{{ "%.0f%%"|format(m.coverage_recent * 100) }}{% elif m.sample_coverage is defined %}{{ "%.0f%%"|format(m.sample_coverage * 100) }}{% else %}-{% endif %}</td>
+<td>{{ p.created_at[:19] }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="muted">No parser{% if status %} with status {{ status }}{% endif %}.</p>{% endif %}
+</div>
+{% endblock %}

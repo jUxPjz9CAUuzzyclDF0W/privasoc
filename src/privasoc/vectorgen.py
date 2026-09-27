@@ -105,18 +105,21 @@ def validate(vector_bin: str, vector_dir: Path) -> str | None:
             "VECTOR_DATA_DIR": d,
             "PRIVASOC_INBOX": d,
         }
-        proc = subprocess.run(  # noqa: S603 - fixed argv
-            [
-                vector_bin,
-                "validate",
-                "--skip-healthchecks",
-                "--no-environment",
-                "--config-dir",
-                str(vector_dir),
-            ],
-            capture_output=True,
-            text=True,
-            env=env,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(  # noqa: S603 - fixed argv
+                [
+                    vector_bin,
+                    "validate",
+                    "--skip-healthchecks",
+                    "--no-environment",
+                    "--config-dir",
+                    str(vector_dir),
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+        except OSError as exc:  # binary missing or not executable: nothing is deployed
+            return f"cannot run {vector_bin}: {exc}"
     return None if proc.returncode == 0 else (proc.stdout + proc.stderr)[-3000:]

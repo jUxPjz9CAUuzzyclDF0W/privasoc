@@ -86,7 +86,25 @@ uv run privasoc propose --source pihole                      # the LLM writes a 
 uv run privasoc parsers show <id>                            # VRL, checks, preview
 uv run privasoc parsers approve <id>                         # human decision + backfill
 uv run privasoc hosts list                                   # senders, status, health
+uv run privasoc serve                                        # API + review UI
 ```
+
+Every CLI decision is also in the **review UI** at `http://<host>:8000/ui/` (sign in with
+`PRIVASOC_API_TOKEN`; set `PRIVASOC_HOST=0.0.0.0` to reach it from the LAN): approve new
+senders, see host health, start a parser proposal, review it (checks, spec, VRL, attempts,
+preview, and a live run on the latest quarantined lines), then approve or reject it.
+Quarantined lines are shown pseudonymised unless you ask for raw. No asset is loaded from a
+third-party host.
+
+![Dashboard](docs/img/ui-dashboard.png)
+
+<details><summary>Parser review page</summary>
+
+![Parser review](docs/img/ui-parser.png)
+
+</details>
+
+Screenshots use synthetic demo data.
 
 By default the model does not write code: it answers with a small YAML spec (a regex and
 an ECS mapping per line shape), which privasoc validates and compiles to VRL itself. Small
@@ -97,7 +115,7 @@ When the local model gives up, stagnates or hallucinates, it stops and suggests
 the remote model only ever sees pseudonymised lines.
 
 Live mode: `docker compose up -d`, then send syslog to UDP/TCP `5514` or drop `*.log`
-files in `data/inbox/`; new senders appear in `privasoc hosts list` as pending. Approving a parser regenerates `vector/pipeline.yaml`, which Vector
+files in `data/inbox/`; new senders appear as pending in the UI and in `privasoc hosts list`. Approving a parser regenerates `vector/pipeline.yaml`, which Vector
 hot-reloads.
 
 Example (real output):
@@ -158,7 +176,8 @@ on free text; step 5 adds a local-LLM pass and the evaluation publishes the rate
 2. **Parser generation loop**: sandbox, Drain sampling, anti-hallucination, API fallback. ✅
 3. **Parser evaluation** on Elastic integration fixtures + HTML report. ✅
    Source onboarding (pending hosts, known formats first, backfill) and host health. ✅
-4. Web review UI (parsers, learned pseudonymisation).
+4. **Web review UI**: hosts, health, parser review, quarantine, events. ✅
+   (The page for learned pseudonymisation comes with step 5.)
 5. Local-LLM pseudonymisation that learns (human-approved).
 6. Sigma detection + alerts + structured AI triage.
 7. AI-written Sigma rules, natural-language hunting.

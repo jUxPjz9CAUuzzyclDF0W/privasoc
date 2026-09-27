@@ -10,8 +10,9 @@ from typing import Annotated
 import typer
 from cryptography.fernet import Fernet
 
+from privasoc import service
 from privasoc.config import Settings, get_settings
-from privasoc.pseudo import Pseudonymizer, Vault
+from privasoc.pseudo import Pseudonymizer
 from privasoc.store import Record, Store
 
 app = typer.Typer(help="Privacy-first, local-LLM SOC analyst.", no_args_is_help=True)
@@ -24,14 +25,7 @@ SECRET_GENERATORS = {
 
 
 def _pseudonymizer() -> Pseudonymizer:
-    s = get_settings()
-    s.require_secrets()
-    vault = Vault(
-        s.vault_path,
-        s.hmac_key.get_secret_value().encode(),
-        s.vault_key.get_secret_value().encode(),
-    )
-    return Pseudonymizer(vault)
+    return service.pseudonymizer(get_settings())
 
 
 @app.command()
@@ -94,10 +88,7 @@ def import_file(
 
 
 def _approve_flow(store: Store, s: Settings, source: str) -> None:
-    from privasoc import onboarding
-    from privasoc.sandbox import Sandbox
-
-    r = onboarding.approve_host(store, s, Sandbox(s.vector_bin), source)
+    r = _do(service.approve_host, store, s, source)
     if r["format"] == "unknown":
         typer.echo(
             f"{source}: format not known by Vector; {r.get('quarantined', 0)} lines in "
@@ -110,6 +101,15 @@ def _approve_flow(store: Store, s: Settings, source: str) -> None:
         )
 
 
+def _do(action, *args, **kwargs):
+    """Run a shared action; its refusals become a clean CLI error."""
+    try:
+        return action(*args, **kwargs)
+    except service.ActionError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
 hosts_app = typer.Typer(help="Senders: approval (D45) and health (D47).", no_args_is_help=True)
 app.add_typer(hosts_app, name="hosts")
 
@@ -117,8 +117,6 @@ app.add_typer(hosts_app, name="hosts")
 @hosts_app.command("list")
 def hosts_list(status: str | None = None) -> None:
     """Every sender with its status, format and health."""
-    from privasoc import health
-
     store = Store(get_settings().db_path)
     rows = store.hosts(status)
     if not rows:
@@ -126,8 +124,7 @@ def hosts_list(status: str | None = None) -> None:
     for h in rows:
         line = f"{h['source']:28} {h['status']:9} {h['format'] or '-':24} lines={h['lines']}"
         if h["status"] == "approved":
-            hs = health.compute(store, h)
-            store.record_health(h["source"], hs["status"], hs["reasons"])
+            hs = service.host_health(store, h)
             line += f"  health={hs['status']}" + (
                 f" ({'; '.join(hs['reasons'])})" if hs["reasons"] else ""
             )
@@ -138,19 +135,13 @@ def hosts_list(status: str | None = None) -> None:
 def hosts_approve(source: str) -> None:
     """Approve a pending sender: known formats are ingested, others go to quarantine."""
     s = get_settings()
-    store = Store(s.db_path)
-    if not store.host(source):
-        raise typer.BadParameter(f"unknown host {source!r}")
-    _approve_flow(store, s, source)
+    _approve_flow(Store(s.db_path), s, source)
 
 
 @hosts_app.command("reject")
 def hosts_reject(source: str) -> None:
     """Reject a sender: its held lines are deleted and future lines dropped."""
-    store = Store(get_settings().db_path)
-    if not store.host(source):
-        raise typer.BadParameter(f"unknown host {source!r}")
-    store.set_host(source, "rejected")
+    _do(service.reject_host, Store(get_settings().db_path), source)
     typer.echo(f"{source} rejected")
 
 
@@ -159,15 +150,11 @@ def hosts_health(source: str) -> None:
     """Current health of a host, its metrics and the history of status changes."""
     import json
 
-    from privasoc import health
-
     store = Store(get_settings().db_path)
     h = store.host(source)
     if not h:
         raise typer.BadParameter(f"unknown host {source!r}")
-    hs = health.compute(store, h)
-    store.record_health(source, hs["status"], hs["reasons"])
-    typer.echo(json.dumps(hs, indent=2))
+    typer.echo(json.dumps(service.host_health(store, h), indent=2))
     for at, st, reasons in store.health_history(source, 10):
         typer.echo(f"  {at}  {st:8} {'; '.join(reasons)}")
 
@@ -180,20 +167,9 @@ def hosts_thresholds(
         typer.Argument(help="key=value pairs, e.g. silence_min_minutes=30 parse_warning=0.8"),
     ],
 ) -> None:
-    """Override health thresholds for one host."""
-    from privasoc.health import DEFAULTS
-
-    store = Store(get_settings().db_path)
-    h = store.host(source)
-    if not h:
-        raise typer.BadParameter(f"unknown host {source!r}")
-    th = dict(h["thresholds"])
-    for kv in values:
-        k, _, v = kv.partition("=")
-        if k not in DEFAULTS:
-            raise typer.BadParameter(f"unknown threshold {k!r}; known: {sorted(DEFAULTS)}")
-        th[k] = float(v)
-    store.set_host(source, thresholds=th)
+    """Override health thresholds for one host (key= removes an override)."""
+    pairs = dict(kv.partition("=")[::2] for kv in values)
+    th = _do(service.set_thresholds, Store(get_settings().db_path), source, pairs)
     typer.echo(f"{source}: {th}")
 
 
@@ -242,48 +218,7 @@ app.add_typer(parsers_app, name="parsers")
 
 
 def _endpoint(s: Settings, provider: str):
-    from privasoc.llm import Endpoint
-
-    if provider == "remote":
-        return Endpoint(
-            "remote", s.llm_remote_url, s.llm_remote_model, s.llm_remote_api_key.get_secret_value()
-        )
-    return Endpoint("local", s.llm_local_url, s.llm_local_model, think=s.llm_local_think)
-
-
-def _run_generation(
-    source: str, provider: str, store: Store, s: Settings, lines: list[str], mode: str
-):
-    from privasoc.generator import generate
-    from privasoc.llm import LLMClient
-    from privasoc.sandbox import Sandbox
-
-    llm = LLMClient(
-        _endpoint(s, provider),
-        call_log=store.log_llm_call,
-        timeout=s.llm_timeout,
-        max_tokens=s.llm_max_tokens,
-        num_ctx=s.llm_num_ctx,
-    )
-    sandbox = Sandbox(s.vector_bin)
-    try:  # fail fast, before minutes of LLM time
-        typer.echo(f"sandbox: {sandbox.check()}")
-        llm.check()
-    except RuntimeError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    return generate(
-        source,
-        lines,
-        llm,
-        _pseudonymizer(),
-        sandbox,
-        k=s.sample_size,
-        max_attempts=s.max_attempts,
-        progress=lambda msg: typer.echo(f"  {msg}"),
-        mode=mode,
-        min_coverage=s.min_coverage,
-    )
+    return service._endpoint(s, provider)
 
 
 @app.command()
@@ -296,38 +231,18 @@ def propose(
 ) -> None:
     """Ask the LLM to write a parser for a quarantined source."""
     s = get_settings()
-    mode = mode or s.parser_mode
-    if mode not in {"structured", "vrl"}:
-        raise typer.BadParameter("mode must be structured or vrl")
-    store = Store(s.db_path)
-    host = store.host(source)
-    if host and host["status"] != "approved":
-        raise typer.BadParameter(
-            f"{source!r} is {host['status']}: approve the host first (privasoc hosts approve)"
-        )
-    lines = store.quarantine_lines(source)
-    if not lines:
-        raise typer.BadParameter(f"no quarantined lines for {source!r}")
-    typer.echo(f"{len(lines)} lines, asking {provider} model...")
-    out = _run_generation(source, provider, store, s, lines, mode)
-    if out.status == "needs_escalation" and provider == "local":
-        if s.auto_fallback and s.llm_remote_url:
-            typer.echo(f"local model: {out.reason}; falling back to remote API (pseudonymised)")
-            store.save_parser(
-                out.parser_id, source, "failed", out.provider, out.model, out.vrl, out.report()
-            )
-            out = _run_generation(source, "remote", store, s, lines, mode)
-        else:
-            typer.echo(
-                f"local model: {out.reason}. Retry with --provider remote if you accept "
-                "sending pseudonymised samples to the API."
-            )
-    store.save_parser(
-        out.parser_id, source, out.status, out.provider, out.model, out.vrl, out.report()
+    out = _do(
+        service.propose,
+        Store(s.db_path),
+        s,
+        source,
+        provider,
+        mode,
+        progress=lambda msg: typer.echo(f"  {msg}"),
     )
-    typer.echo(f"{out.parser_id}: {out.status} ({out.reason})  {out.metrics}")
-    if out.status == "proposed":
-        typer.echo(f"Review with: privasoc parsers show {out.parser_id}")
+    typer.echo(f"{out['parser_id']}: {out['status']} ({out['reason']})  {out['metrics']}")
+    if out["status"] == "proposed":
+        typer.echo(f"Review with: privasoc parsers show {out['parser_id']} (or in the web UI)")
 
 
 @parsers_app.command("list")
@@ -373,33 +288,10 @@ def parsers_show(parser_id: str) -> None:
 
 
 def _set_status(parser_id: str, status: str) -> None:
-    from privasoc import vectorgen
-
     s = get_settings()
-    store = Store(s.db_path)
-    p = store.parser(parser_id)
-    if not p:
-        raise typer.BadParameter("unknown parser")
-    if status == "approved" and p["status"] != "proposed":
-        raise typer.BadParameter(f"only a proposed parser can be approved (is {p['status']})")
-    previous = p["status"]
-    active = [x["id"] for x in store.parsers("approved") if x["source"] == p["source"]]
-    store.set_parser_status(parser_id, status)
-    path = vectorgen.write(store.parsers("approved"), s.vector_dir)
-    error = vectorgen.validate(s.vector_bin, s.vector_dir)
-    if error:  # never leave Vector with a config it cannot load
-        store.set_parser_status(parser_id, "rejected" if status == "approved" else previous)
-        for pid in active:  # restore the parser that was active before
-            store.set_parser_status(pid, "approved")
-        vectorgen.write(store.parsers("approved"), s.vector_dir)
-        typer.echo(error, err=True)
-        raise typer.Exit(code=1)
-    typer.echo(f"{parser_id} {status}; regenerated and validated {path}")
-    if status == "approved":  # D45 step 6: ingest the lines that waited in quarantine
-        from privasoc import onboarding
-        from privasoc.sandbox import Sandbox
-
-        r = onboarding.after_parser_approval(store, Sandbox(s.vector_bin), store.parser(parser_id))
+    r = _do(service.set_parser_status, Store(s.db_path), s, parser_id, status)
+    typer.echo(f"{parser_id} {status}; regenerated and validated {r['config']}")
+    if status == "approved":  # D45 step 6: the lines that waited in quarantine
         typer.echo(
             f"backfill: {r['backfilled']} quarantined lines ingested, "
             f"{r['still_quarantined']} still in quarantine"

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block header %}{% endblock %}
+{% block content %}
+<div class="login panel">
+  <h1>privasoc</h1>
+  <form method="post" action="/ui/login">
+    <label for="t">Access token <span class="muted">(PRIVASOC_API_TOKEN)</span></label>
+    <input id="t" type="password" name="access_token" autocomplete="current-password" autofocus required>
+    <input type="hidden" name="next" value="{{ next }}">
+    <button class="primary">Sign in</button>
+  </form>
+</div>
+{% endblock %}

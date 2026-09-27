@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
+<title>{% block title %}privasoc{% endblock %}</title>
+<link rel="stylesheet" href="/ui/static/app.css">
+<script src="/ui/static/htmx.min.js" defer></script>
+</head>
+<body>
+{% block header %}
+<header>
+  <span class="brand">privasoc</span>
+  <nav>
+    <a href="/ui/">Dashboard</a>
+    <a href="/ui/hosts">Hosts</a>
+    <a href="/ui/parsers">Parsers</a>
+    <a href="/ui/quarantine">Quarantine</a>
+    <a href="/ui/events">Events</a>
+    <a href="/ui/jobs">Jobs{% if running_job %} <span class="badge running">1 running</span>{% endif %}</a>
+  </nav>
+  <form method="post" action="/ui/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Log out</button></form>
+</header>
+{% endblock %}
+<main>
+{% if msg %}<div class="flash {{ level }}">{{ msg }}</div>{% endif %}
+{% block content %}{% endblock %}
+<p class="muted">privasoc {{ version }}</p>
+</main>
+</body>
+</html>

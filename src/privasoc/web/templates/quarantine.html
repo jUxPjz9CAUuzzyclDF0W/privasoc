@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "_macros.html" import host_link %}
+{% block title %}Quarantine · privasoc{% endblock %}
+{% block content %}
+<h1>Quarantine</h1>
+<p class="muted">Lines of approved hosts that no parser recognises (D26). Nothing is lost: an approved
+parser re-ingests them.</p>
+<div class="panel">
+{% if stats %}<table>
+<tr><th>Source</th><th class="num">Lines</th><th>First</th><th>Last</th><th></th></tr>
+{% for s, n, first, last in stats %}
+<tr><td>{{ host_link(s) }}</td><td class="num">{{ n }}</td><td>{{ first[:19] }}</td><td>{{ last[:19] }}</td>
+<td><a href="/ui/quarantine?source={{ s|q }}">sample</a></td></tr>
+{% endfor %}</table>
+{% else %}<p class="muted">Quarantine is empty.</p>{% endif %}
+</div>
+{% if source %}
+<h2>{{ source }}: latest {{ lines|length }} lines ({% if raw %}raw{% else %}pseudonymised{% endif %})
+  <a href="/ui/quarantine?source={{ source|q }}{% if not raw %}&raw=1{% endif %}">{% if raw %}hide raw{% else %}show raw{% endif %}</a></h2>
+<div class="panel lines">{% for l in lines %}<pre>{{ l }}</pre>{% endfor %}</div>
+{% endif %}
+{% endblock %}

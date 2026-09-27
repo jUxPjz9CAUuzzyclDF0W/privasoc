@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, post, host_link with context %}
+{% block title %}Parser {{ p.id }} · privasoc{% endblock %}
+{% block content %}
+<h1>Parser <code>{{ p.id }}</code> {{ badge(p.status) }}</h1>
+<p class="muted">source {{ host_link(p.source) }} · {{ p.provider }}:{{ p.model }} · {{ p.created_at[:19] }}</p>
+<div class="panel">
+  <p>{{ r.reason }}</p>
+  {% if p.status in ["proposed", "approved"] %}
+  <div class="actions">
+    {% if p.status == "proposed" %}{{ post("/ui/parser/approve", "Approve and deploy", {"id": p.id}, "primary") }}{% endif %}
+    {{ post("/ui/parser/reject", "Reject" if p.status == "proposed" else "Deactivate", {"id": p.id}, "danger") }}
+  </div>
+  <p class="muted">Approving regenerates Vector's pipeline (validated before use, rolled back if
+  Vector refuses it) and re-ingests this host's quarantine.</p>
+  {% endif %}
+</div>
+
+{% if r.metrics %}
+<h2>Checks</h2>
+<div class="panel"><table>
+{% for k, v in r.metrics.items() %}<tr><th>{{ k }}</th><td>{% if v is mapping or (v is iterable and v is not string) %}<code>{{ v|tojson }}</code>{% else %}{{ v }}{% endif %}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+
+<h2>Preview on real lines</h2>
+<p class="muted">Local display only: these lines never left this machine unpseudonymised.</p>
+<div class="panel">
+  <button hx-get="/ui/parser/try?id={{ p.id|q }}" hx-target="#preview" hx-swap="innerHTML" class="spin">Run now on the latest quarantined lines</button>
+</div>
+<div id="preview">{% set items = r.preview or [] %}{% set live = False %}{% include "_preview.html" %}</div>
+
+<div class="grid2">
+{% if r.spec %}<div><h2>Spec (written by the model)</h2><pre>{{ r.spec }}</pre></div>{% endif %}
+<div><h2>VRL{% if r.spec %} (compiled){% endif %}</h2><pre>{{ p.vrl or "(none)" }}</pre></div>
+</div>
+
+{% if r.attempts %}
+<h2>Attempts</h2>
+<div class="panel"><table>
+<tr><th>#</th><th>Model status</th><th>Error</th><th>Details</th><th class="num">Latency</th></tr>
+{% for a in r.attempts %}
+<tr><td>{{ a.n }}</td><td>{{ a.status }}</td><td>{{ a.error_class or "ok" }}</td>
+<td>{% for d in (a.details or [])[:4] %}<div>{{ d[:300] }}</div>{% endfor %}{% if (a.details or [])|length > 4 %}<div class="muted">+{{ a.details|length - 4 }} more</div>{% endif %}</td>
+<td class="num">{{ "%.1f"|format(a.latency_s or 0) }} s</td></tr>
+{% endfor %}
+</table></div>
+{% endif %}
+
+{% if r.templates %}
+<details><summary>Drain templates ({{ r.templates|length }})</summary>
+<div class="panel lines">{% for t in r.templates %}<pre>{{ t }}</pre>{% endfor %}</div></details>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, host_link %}
+{% block title %}Jobs · privasoc{% endblock %}
+{% block content %}
+<h1>Jobs</h1>
+<p class="muted">Parser generations started from this UI (kept in memory until restart).</p>
+<div class="panel">
+{% if jobs %}<table>
+<tr><th>Job</th><th>Kind</th><th>Target</th><th>Started</th><th>Status</th></tr>
+{% for j in jobs %}
+<tr><td><a href="/ui/job?id={{ j.id }}"><code>{{ j.id }}</code></a></td><td>{{ j.kind }}</td><td>{{ host_link(j.target) }}</td><td>{{ j.started_at[:19] }}</td><td>{{ badge(j.status) }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="muted">No job yet.</p>{% endif %}
+</div>
+{% endblock %}

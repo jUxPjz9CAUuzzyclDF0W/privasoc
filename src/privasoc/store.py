@@ -336,6 +336,38 @@ class Store:
     def event_count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
 
+    def latest_events(self, source: str | None = None, limit: int = 50) -> list[dict]:
+        q, args = "SELECT id, source, received_at, parser_id, ecs FROM events", ()
+        if source:
+            q, args = q + " WHERE source=?", (source,)
+        rows = self.conn.execute(q + " ORDER BY id DESC LIMIT ?", (*args, limit)).fetchall()
+        keys = ("id", "source", "received_at", "parser_id", "ecs")
+        return [{**dict(zip(keys, r, strict=True)), "ecs": json.loads(r[4])} for r in rows]
+
+    def summary(self) -> dict[str, int]:
+        """Counters for the dashboard (step 4)."""
+
+        def one(q: str) -> int:
+            return self.conn.execute(q).fetchone()[0]
+
+        out = {f"hosts_{st}": 0 for st in ("pending", "approved", "rejected")}
+        for st, n in self.conn.execute("SELECT status, COUNT(*) FROM hosts GROUP BY status"):
+            out[f"hosts_{st}"] = n
+        out["events"] = one("SELECT COUNT(*) FROM events")
+        out["quarantined"] = one("SELECT COUNT(*) FROM unparsed WHERE held=0")
+        out["held"] = one("SELECT COUNT(*) FROM unparsed WHERE held=1")
+        out["parsers_proposed"] = one("SELECT COUNT(*) FROM parsers WHERE status='proposed'")
+        out["parsers_approved"] = one("SELECT COUNT(*) FROM parsers WHERE status='approved'")
+        return out
+
+    def held_sample(self, source: str, limit: int = 10) -> list[str]:
+        """Latest lines of a pending host, for the approval decision."""
+        rows = self.conn.execute(
+            "SELECT raw FROM unparsed WHERE source=? AND held=1 ORDER BY id DESC LIMIT ?",
+            (source, limit),
+        ).fetchall()
+        return [r[0] for r in rows]
+
 
 def _parser_row(row) -> dict:
     keys = ("id", "source", "created_at", "status", "provider", "model", "vrl", "report")

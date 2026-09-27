@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Hosts · privasoc{% endblock %}
+{% block content %}
+<h1>Hosts</h1>
+<p class="muted">Every sender is held until a human approves it (D45). Health is computed from what
+privasoc receives, with no agent on the device (D47). This table refreshes every 30 seconds.</p>
+<div class="panel">
+{% include "_hosts_table.html" %}
+</div>
+{% endblock %}

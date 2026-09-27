@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% from "_macros.html" import host_link %}
+{% block title %}Job {{ job.id }} · privasoc{% endblock %}
+{% block content %}
+<h1>Parser generation for {{ host_link(job.target) }}</h1>
+{% include "_job.html" %}
+{% endblock %}

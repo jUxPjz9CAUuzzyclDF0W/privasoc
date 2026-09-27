@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, post, host_link, parser_link with context %}
+{% block content %}
+<h1>Dashboard</h1>
+<div class="cards">
+  <a class="card" href="/ui/hosts"><div class="n">{{ summary.hosts_pending }}</div><div class="l">hosts waiting for approval</div></a>
+  <a class="card" href="/ui/hosts"><div class="n">{{ summary.hosts_approved }}</div><div class="l">approved hosts</div></a>
+  <a class="card" href="/ui/parsers?status=proposed"><div class="n">{{ summary.parsers_proposed }}</div><div class="l">parsers to review</div></a>
+  <a class="card" href="/ui/quarantine"><div class="n">{{ summary.quarantined }}</div><div class="l">lines in quarantine</div></a>
+  <div class="card"><div class="n">{{ summary.held }}</div><div class="l">lines held (host not approved)</div></div>
+  <a class="card" href="/ui/events"><div class="n">{{ summary.events }}</div><div class="l">normalised events</div></a>
+</div>
+
+<h2>New senders</h2>
+<div class="panel">
+{% if pending %}
+<table>
+<tr><th>Host</th><th>First seen</th><th class="num">Lines held</th><th></th></tr>
+{% for h in pending %}
+<tr><td>{{ host_link(h.source) }}</td><td>{{ h.first_seen[:19] }}</td><td class="num">{{ h.lines }}</td>
+<td><div class="actions">
+  {{ post("/ui/host/approve", "Approve", {"source": h.source}, "primary") }}
+  {{ post("/ui/host/reject", "Reject", {"source": h.source}, "danger") }}
+</div></td></tr>
+{% endfor %}
+</table>
+{% else %}<p class="muted">No sender waiting. Point a device at privasoc (syslog on port 5514).</p>{% endif %}
+</div>
+
+<h2>Hosts needing attention</h2>
+<div class="panel">
+{% if unhealthy %}
+<table>
+<tr><th>Host</th><th>Health</th><th>Why</th></tr>
+{% for h in unhealthy %}
+<tr><td>{{ host_link(h.source) }}</td><td>{{ badge(h.health.status) }}</td><td>{{ h.health.reasons|join("; ") }}</td></tr>
+{% endfor %}
+</table>
+{% else %}<p class="muted">Every approved host is healthy.</p>{% endif %}
+</div>
+
+<h2>Parsers to review</h2>
+<div class="panel">
+{% if proposed %}
+<table>
+<tr><th>Parser</th><th>Source</th><th>Model</th><th>Reason</th></tr>
+{% for p in proposed %}
+<tr><td>{{ parser_link(p.id) }}</td><td>{{ host_link(p.source) }}</td><td>{{ p.provider }}:{{ p.model }}</td><td>{{ p.report.reason }}</td></tr>
+{% endfor %}
+</table>
+{% else %}<p class="muted">Nothing to review.</p>{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% from "_macros.html" import badge, parser_link %}
+<div id="job" {% if job.status == "running" %}hx-get="/ui/job/fragment?id={{ job.id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  <p>{{ badge(job.status) }} <span class="muted">started {{ job.started_at[:19] }}</span></p>
+  {% if job.result %}
+  <div class="panel">
+    <p>{{ badge(job.result.status) }} {{ job.result.reason }}</p>
+    <p>{{ parser_link(job.result.parser_id) }} {% if job.result.status == "proposed" %}: review it and approve or reject.{% endif %}</p>
+  </div>
+  {% endif %}
+  {% if job.error %}<div class="flash error">{{ job.error }}</div>{% endif %}
+  <div class="panel"><pre>{% for l in job.log %}{{ l }}
+{% endfor %}{% if job.status == "running" %}...{% endif %}</pre></div>
+</div>

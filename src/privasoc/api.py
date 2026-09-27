@@ -1,4 +1,4 @@
-"""HTTP API. Step 1: ingestion endpoint for Vector + health.
+"""HTTP API: ingestion endpoint for Vector, hosts and health, and the review UI (step 4).
 
 Vector's `http` sink posts newline-delimited JSON; each object carries the raw line in
 `message` and, once parsers exist, the normalised document in `ecs` + `parser_id`.
@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import hmac
 import json
+import threading
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from privasoc import __version__
 from privasoc.config import Settings, get_settings
@@ -19,12 +21,21 @@ from privasoc.store import Record, Store
 MAX_BODY = 10 * 1024 * 1024
 
 
-def create_app(settings: Settings | None = None, store: Store | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, store: Store | None = None, ui: bool = True
+) -> FastAPI:
     settings = settings or get_settings()
     settings.require_secrets()
     store = store or Store(settings.db_path)
     token = settings.api_token.get_secret_value()
     app = FastAPI(title="privasoc", version=__version__)
+    # One SQLite connection is shared by the API and the UI: writes are serialised here,
+    # and blocking work runs in the thread pool, never on the event loop.
+    lock = threading.RLock()
+
+    def locked(fn, *args):
+        with lock:
+            return fn(*args)
 
     def auth(authorization: Annotated[str | None, Header()] = None) -> None:
         expected = f"Bearer {token}"
@@ -51,24 +62,24 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             items = obj if isinstance(obj, list) else [obj]
             for it in items:
                 records.append(_to_record(it))
-        return store.ingest(records)
+        return await run_in_threadpool(locked, store.ingest, records)
 
     @app.get("/hosts", dependencies=[Depends(auth)])
     def hosts() -> list[dict]:
-        return store.hosts()
+        return locked(store.hosts)
 
     @app.get("/health/hosts", dependencies=[Depends(auth)])
     def hosts_health() -> list[dict]:
         """D47: health of every approved host."""
-        from privasoc import health
+        from privasoc import service
 
-        out = []
-        for h in store.hosts("approved"):
-            hs = health.compute(store, h)
-            store.record_health(h["source"], hs["status"], hs["reasons"])
-            out.append(hs)
-        return out
+        with lock:
+            return [service.host_health(store, h) for h in store.hosts("approved")]
 
+    if ui:
+        from privasoc import web
+
+        web.install(app, settings, store, lock)
     app.state.store = store
     return app
 
