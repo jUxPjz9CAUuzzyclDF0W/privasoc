@@ -182,11 +182,17 @@ def _generate(store, s, source, provider, lines, mode, say):
         llm.check()
     except RuntimeError as exc:
         raise ActionError(str(exc)) from exc
+    pz = pseudonymizer(s)
+    if provider == "remote" and s.remote_residual_pass:
+        # Step 5: the local model first looks for what the detectors missed. Its findings
+        # are applied to this call at once and kept as proposals for a human to review.
+        extra = _local_residual_rules(store, s, lines, say)
+        pz = pz.with_rules(extra)
     return generate(
         source,
         lines,
         llm,
-        pseudonymizer(s),
+        pz,
         sandbox,
         k=s.sample_size,
         max_attempts=s.max_attempts,
@@ -240,3 +246,165 @@ def propose(
         "reason": out.reason,
         "metrics": out.metrics,
     }
+
+
+# ---------------------------------------------------------------------- learned pseudonymisation
+# (step 5, D25, D33)
+
+
+def _local_llm(store: Store, s: Settings):
+    import dataclasses
+
+    from privasoc.llm import LLMClient
+    from privasoc.pseudo.learn import LocalOnlyError, ensure_local
+
+    if not s.llm_local_model:
+        raise ActionError("no local model configured (PRIVASOC_LLM_LOCAL_MODEL)")
+    try:
+        ensure_local(s.llm_local_url)
+    except LocalOnlyError as exc:
+        raise ActionError(str(exc)) from exc
+    llm = LLMClient(
+        dataclasses.replace(_endpoint(s, "local"), think=s.learn_think),
+        call_log=store.log_llm_call,
+        timeout=s.llm_timeout,
+        max_tokens=s.learn_max_tokens,
+        num_ctx=s.llm_num_ctx,
+    )
+    try:
+        llm.check()
+    except RuntimeError as exc:
+        raise ActionError(str(exc)) from exc
+    return llm
+
+
+def _learn(store: Store, s: Settings, lines: list[str], say, origin: str = "llm") -> list[dict]:
+    import httpx
+
+    from privasoc.pseudo import learn
+    from privasoc.sampling import stratified_sample
+
+    llm = _local_llm(store, s)
+    pz = pseudonymizer(s)
+    try:
+        idx, _ = stratified_sample(lines, s.learn_sample)
+        sample = [lines[i] for i in sorted(idx)]
+        say(f"{len(sample)} lines (one per template first) shown to the local model")
+        try:
+            findings = learn.residual_pass(llm, pz, sample, batch=s.learn_batch, progress=say)
+        except httpx.HTTPError as exc:
+            raise ActionError(f"local model error: {exc}") from exc
+        out = []
+        for rule in learn.to_rules(findings, origin):
+            new = pz.vault.add_rule(rule)
+            stored = pz.vault.rule(rule.id)
+            eff = learn.preview(pz, rule, lines, examples=0)
+            out.append(
+                {
+                    "id": rule.id,
+                    "label": rule.label(),
+                    "kind": rule.kind,
+                    "new": new,
+                    "status": stored.status if stored else rule.status,
+                    "changed": eff["changed"],
+                    "rule": rule,
+                }
+            )
+        return out
+    finally:
+        pz.vault.close()
+
+
+def _local_residual_rules(store: Store, s: Settings, lines: list[str], say) -> list:
+    """Rules to apply to one remote call: new proposals plus earlier proposals that are
+    still waiting (never the rejected ones)."""
+    try:
+        found = _learn(store, s, lines, say, origin="llm")
+    except ActionError as exc:
+        raise ActionError(
+            f"local residual pass unavailable ({exc}). The remote API is only called after "
+            "the local model has checked the samples; set PRIVASOC_REMOTE_RESIDUAL_PASS=false "
+            "to rely on the regex detectors alone."
+        ) from exc
+    extra = [f["rule"] for f in found if f["status"] == "proposed"]
+    say(f"local residual pass: {len(extra)} extra rule(s) applied to this remote call")
+    return extra
+
+
+def learn_rules(
+    store: Store, s: Settings, source: str, progress: Callable[[str], None] | None = None
+) -> list[dict]:
+    """Ask the local model what the current rules miss in a source's latest lines."""
+    say = progress or (lambda _m: None)
+    host = store.host(source)
+    if not host:
+        raise ActionError(f"unknown host {source!r}")
+    if host["status"] != "approved":
+        raise ActionError(f"{source!r} is {host['status']}: its lines go to no model")
+    lines = store.recent_raw(source, 500)
+    if not lines:
+        raise ActionError(f"no line for {source!r} yet")
+    return [{k: v for k, v in f.items() if k != "rule"} for f in _learn(store, s, lines, say)]
+
+
+def list_rules(s: Settings, status: str | None = None) -> list:
+    pz = pseudonymizer(s)
+    try:
+        return pz.vault.rules(status)
+    finally:
+        pz.vault.close()
+
+
+def add_rule(s: Settings, rtype: str, kind: str, pattern: str, approve: bool = False):
+    from privasoc.pseudo.rules import Rule, RuleError, validate
+
+    try:
+        pattern = validate(rtype, kind, pattern)
+    except RuleError as exc:
+        raise ActionError(str(exc)) from exc
+    rule = Rule(rtype, kind, pattern, "approved" if approve else "proposed", "human")
+    pz = pseudonymizer(s)
+    try:
+        if not pz.vault.add_rule(rule):
+            raise ActionError(f"rule {rule.id} already exists ({pz.vault.rule(rule.id).status})")
+    finally:
+        pz.vault.close()
+    return rule
+
+
+def set_rule_status(s: Settings, rule_id: str, status: str):
+    if status not in {"approved", "rejected"}:
+        raise ActionError("status must be approved or rejected")
+    pz = pseudonymizer(s)
+    try:
+        rule = pz.vault.rule(rule_id)
+        if not rule:
+            raise ActionError(f"unknown rule {rule_id!r}")
+        if status == "approved":  # re-validate: the model's proposals are untrusted input
+            from privasoc.pseudo.rules import RuleError, validate
+
+            try:
+                validate(rule.rtype, rule.kind, rule.pattern)
+            except RuleError as exc:
+                raise ActionError(f"cannot approve: {exc}") from exc
+        pz.vault.set_rule_status(rule_id, status)
+        return pz.vault.rule(rule_id)
+    finally:
+        pz.vault.close()
+
+
+def rule_preview(store: Store, s: Settings, rule_id: str, source: str | None = None) -> dict:
+    """Effect of a rule on the latest real lines (all approved hosts, or one)."""
+    from privasoc.pseudo import learn
+
+    pz = pseudonymizer(s)
+    try:
+        rule = pz.vault.rule(rule_id)
+        if not rule:
+            raise ActionError(f"unknown rule {rule_id!r}")
+        # measured against the other approved rules, without this one
+        pz.rules = type(pz.rules)([r for r in pz.rules.rules if r.id != rule_id])
+        lines = store.recent_raw(source, 1000)
+        return {"rule": rule, **learn.preview(pz, rule, lines)}
+    finally:
+        pz.vault.close()

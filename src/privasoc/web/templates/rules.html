@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge %}
+{% block title %}Pseudonymisation · privasoc{% endblock %}
+{% block content %}
+<h1>Pseudonymisation rules</h1>
+<p class="muted">What the detectors miss, learned from your own logs (step 5). The <strong>local</strong>
+model reads lines of one approved host and lists values that still identify a person or a machine;
+privasoc keeps only values really in the lines and turns each into the most general rule it can
+justify (the key it follows, else the literal value). A rule changes nothing until you approve it.
+Rules are stored encrypted in the vault.</p>
+
+<div class="grid2">
+<div class="panel">
+  <h2>Learn from a host</h2>
+  {% if hosts %}
+  <form method="post" action="/ui/rules/learn" class="actions">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <select name="source">{% for h in hosts %}<option>{{ h }}</option>{% endfor %}</select>
+    <button class="primary">Ask the local model</button>
+  </form>
+  <p class="muted">Only the local model is used: these lines are still in clear.</p>
+  {% else %}<p class="muted">No approved host yet.</p>{% endif %}
+</div>
+<div class="panel">
+  <h2>Add a rule</h2>
+  <form method="post" action="/ui/rules/add" class="actions">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <select name="rtype"><option value="key">key</option><option value="value">value</option><option value="regex">regex</option></select>
+    <select name="kind"><option>user</option><option>host</option></select>
+    <input name="pattern" placeholder="e.g. cs1 or nas01" required>
+    <button>Add</button>
+  </form>
+  <p class="muted">key: every value after <code>key=</code> or <code>"key":</code>. regex: at most one
+  capture group, the sensitive part.</p>
+</div>
+</div>
+
+<p class="actions">
+  {% for st in ["", "proposed", "approved", "rejected"] %}
+  <a href="/ui/rules{% if st %}?status={{ st }}{% endif %}" {% if st == status %}class="badge"{% endif %}>{{ st or "all" }}</a>
+  {% endfor %}
+</p>
+<div class="panel">
+{% if rules %}<table>
+<tr><th>Rule</th><th>Status</th><th>Kind</th><th>Pattern</th><th>Origin</th><th>Created</th></tr>
+{% for r in rules %}
+<tr><td><a href="/ui/rule?id={{ r.id }}"><code>{{ r.id }}</code></a></td><td>{{ badge(r.status) }}</td><td>{{ r.kind }}</td>
+<td><code>{{ r.label() }}</code></td><td>{{ r.origin }}</td><td>{{ r.created_at[:19] }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="muted">No rule{% if status %} with status {{ status }}{% endif %}.</p>{% endif %}
+</div>
+{% endblock %}

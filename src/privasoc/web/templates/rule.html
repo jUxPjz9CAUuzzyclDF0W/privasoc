@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, post with context %}
+{% block title %}Rule {{ r.id }} · privasoc{% endblock %}
+{% block content %}
+<h1>Rule <code>{{ r.id }}</code> {{ badge(r.status) }}</h1>
+<p class="muted">{{ r.kind }} · <code>{{ r.label() }}</code> · proposed by {{ r.origin }}{% if r.note %} · {{ r.note }}{% endif %}</p>
+<div class="panel">
+  <div class="actions">
+    {% if r.status != "approved" %}{{ post("/ui/rule/approve", "Approve", {"id": r.id}, "primary") }}{% endif %}
+    {% if r.status != "rejected" %}{{ post("/ui/rule/reject", "Reject", {"id": r.id}, "danger") }}{% endif %}
+  </div>
+  <p class="muted">An approved rule applies to every pseudonymisation: prompts to any model, the
+  quarantine display, evaluations. A rejected rule is never proposed again.</p>
+</div>
+
+<h2>Effect on the latest real lines</h2>
+<form method="get" action="/ui/rule" class="actions">
+  <input type="hidden" name="id" value="{{ r.id }}">
+  <label>Lines of <select name="source"><option value="">every approved host</option>
+  {% for h in hosts %}<option value="{{ h }}" {% if h == source %}selected{% endif %}>{{ h }}</option>{% endfor %}</select></label>
+  <button>Show</button>
+</form>
+<div class="cards">
+  <div class="card"><div class="n">{{ p.changed }}</div><div class="l">of {{ p.lines }} lines changed</div></div>
+  <div class="card"><div class="n">{{ p.distinct }}</div><div class="l">distinct values caught</div></div>
+</div>
+<p class="muted">Local display only. A key or regex that catches values you did not expect is too broad.</p>
+<div class="grid2">
+<div class="panel">
+  <h2>Values caught</h2>
+  {% if p["values"] %}<table>{% for v, n in p["values"] %}<tr><td><code>{{ v }}</code></td><td class="num">{{ n }}</td></tr>{% endfor %}</table>
+  {% else %}<p class="muted">None in these lines.</p>{% endif %}
+</div>
+<div class="panel lines">
+  <h2>Before / after</h2>
+  {% for ex in p.examples %}<pre>{{ ex.before }}</pre><pre>{{ ex.after }}</pre><hr>{% else %}<p class="muted">No line changes.</p>{% endfor %}
+</div>
+</div>
+{% endblock %}

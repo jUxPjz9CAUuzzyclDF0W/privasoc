@@ -1,10 +1,22 @@
 {% from "_macros.html" import badge, parser_link %}
 <div id="job" {% if job.status == "running" %}hx-get="/ui/job/fragment?id={{ job.id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
-  <p>{{ badge(job.status) }} <span class="muted">started {{ job.started_at[:19] }}</span></p>
-  {% if job.result %}
+  <p>{{ badge(job.status) }} <span class="muted">{{ job.kind }} · started {{ job.started_at[:19] }}</span></p>
+  {% if job.result and job.kind == "propose" %}
   <div class="panel">
     <p>{{ badge(job.result.status) }} {{ job.result.reason }}</p>
     <p>{{ parser_link(job.result.parser_id) }} {% if job.result.status == "proposed" %}: review it and approve or reject.{% endif %}</p>
+  </div>
+  {% elif job.result and job.kind == "learn" %}
+  <div class="panel">
+    {% if job.result.rules %}
+    <table>
+    <tr><th>Rule</th><th>Kind</th><th>Pattern</th><th>State</th><th class="num">Lines changed</th></tr>
+    {% for r in job.result.rules %}
+    <tr><td><a href="/ui/rule?id={{ r.id }}"><code>{{ r.id }}</code></a></td><td>{{ r.kind }}</td><td><code>{{ r.label }}</code></td>
+    <td>{% if r.new %}{{ badge("proposed") }} new{% else %}{{ badge(r.status) }} already known{% endif %}</td><td class="num">{{ r.changed }}</td></tr>
+    {% endfor %}
+    </table>
+    {% else %}<p>The local model found no residual personal data.</p>{% endif %}
   </div>
   {% endif %}
   {% if job.error %}<div class="flash error">{{ job.error }}</div>{% endif %}

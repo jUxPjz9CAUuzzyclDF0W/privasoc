@@ -154,3 +154,10 @@ def test_cross_line_propagation(pz):
     assert "fw-lab-01" in b.text
     fixed = pz.propagate(b.text, {**a.mapping, **b.mapping})
     assert "fw-lab-01" not in fixed and pz.leaks(fixed, a.originals | b.originals) == []
+
+
+def test_key_fingerprint_is_not_an_ipv6(pz):
+    fp = "39:33:99:e9:a0:dc:f2:33:1c:9a:ad:61:15:02:5b:a1"
+    line = f"Accepted publickey for bob from 10.0.0.1 port 22 ssh2: RSA {fp}"
+    assert fp in pz.pseudonymize(line).text
+    assert "2001:db8" in pz.pseudonymize("from 2a02:8070:1:2::5 port 22").text

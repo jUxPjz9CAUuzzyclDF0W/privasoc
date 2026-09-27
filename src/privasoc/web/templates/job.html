@@ -2,6 +2,6 @@
 {% from "_macros.html" import host_link %}
 {% block title %}Job {{ job.id }} · privasoc{% endblock %}
 {% block content %}
-<h1>Parser generation for {{ host_link(job.target) }}</h1>
+<h1>{% if job.kind == "learn" %}Learning pseudonymisation rules from{% else %}Parser generation for{% endif %} {{ host_link(job.target) }}</h1>
 {% include "_job.html" %}
 {% endblock %}

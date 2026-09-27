@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 
 from privasoc.pseudo.detectors import Entity, detect
+from privasoc.pseudo.rules import RuleSet
 from privasoc.pseudo.vault import Vault
 
 
@@ -21,8 +22,17 @@ class PseudoResult:
 
 
 class Pseudonymizer:
-    def __init__(self, vault: Vault):
+    def __init__(self, vault: Vault, rules: RuleSet | None = None):
         self.vault = vault
+        # Learned rules (step 5): only the approved ones change what is detected.
+        self.rules = rules if rules is not None else RuleSet(vault.rules("approved"))
+
+    def reload_rules(self) -> None:
+        self.rules = RuleSet(self.vault.rules("approved"))
+
+    def with_rules(self, extra) -> Pseudonymizer:
+        """Same vault, approved rules plus `extra` (a preview, or a one-off local pass)."""
+        return Pseudonymizer(self.vault, self.rules.plus(extra))
 
     def _register_fqdn_suffixes(self, fqdn: str) -> None:
         # So that a bare parent domain written by the LLM can be re-identified too.
@@ -34,7 +44,7 @@ class Pseudonymizer:
         result = PseudoResult(text=text)
         pieces: list[str] = []
         cursor = 0
-        for ent in detect(text):
+        for ent in detect(text, self.rules):
             token = self.vault.token_for(ent.kind, ent.value)
             if ent.kind == "fqdn":
                 self._register_fqdn_suffixes(ent.value)
@@ -52,7 +62,7 @@ class Pseudonymizer:
         # Propagation: a value detected once (e.g. a keyed user) is replaced everywhere in
         # the text, including free-text mentions no detector would have caught.
         seen = {}
-        for ent in detect(text):
+        for ent in detect(text, self.rules):
             seen[ent.value] = self.vault.token_for(ent.kind, ent.value)
         for original in sorted(seen, key=len, reverse=True):
             out = re.sub(

@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     min_coverage: float = 0.8  # I16: a partial parser must cover this share of real lines
     parser_mode: str = "structured"  # D44: structured (regex + mapping) or vrl
     max_attempts: int = 5  # D27: N
+    # Step 5: before any remote API call, the local model looks for personal data the
+    # detectors missed (refuses the call if the local model is unavailable). Off only if
+    # there is no local model at all.
+    remote_residual_pass: bool = True
+    learn_sample: int = 40  # lines shown to the local model per learning run
+    learn_batch: int = 10  # lines per call
+    # Reasoning found more names but took ~80 s per 5 lines on an 8 GB GPU; a per-line
+    # answer format found them in ~2 s without it (I31). Kept as an option.
+    learn_think: bool = False
+    learn_max_tokens: int = 2048
 
     @property
     def db_path(self) -> Path:

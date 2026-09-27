@@ -296,3 +296,85 @@ def leakage(fixtures: list[Fixture], pz) -> dict:
         },
         "examples": examples,
     }
+
+
+# ---------------------------------------------------------------- learned pseudonymisation (step 5)
+
+
+def learning_one(
+    fx: Fixture,
+    make_pz,
+    llm,
+    sample: int = 40,
+    batch: int = 10,
+    progress=None,
+    cache: dict | None = None,
+) -> dict:
+    """Learn rules on the visible half of a fixture with the local model, then measure
+    leakage on the held-out half, before and after. Every proposed rule that passes
+    validation is accepted, so this is the upper bound of what a reviewer can approve.
+
+    Precision: of the values the learned rules catch on held-out lines, the share that
+    Elastic's pipeline also treats as sensitive. The rest is not necessarily wrong (a name
+    in free text is personal data Elastic does not extract), so it is reported as such."""
+    import time
+
+    from privasoc.pseudo import learn
+    from privasoc.pseudo.rules import RuleError, RuleSet, validate
+    from privasoc.sampling import stratified_sample
+
+    visible, held, expected = split(fx)
+    held_fx = Fixture(fx.name, held, expected)
+    pz = make_pz()
+    before = leakage([held_fx], pz)
+    idx, _ = stratified_sample(visible, sample)
+    t0 = time.monotonic()
+    findings = learn.residual_pass(
+        llm, pz, [visible[i] for i in sorted(idx)], batch=batch, progress=progress, cache=cache
+    )
+    llm_s = time.monotonic() - t0
+    rules = []
+    for r in learn.to_rules(findings):
+        try:
+            validate(r.rtype, r.kind, r.pattern)
+            rules.append(r)
+        except RuleError:
+            pass
+    after = leakage([held_fx], pz.with_rules(rules))
+    rs = RuleSet(rules)
+    true_hits = other = 0
+    for line, doc in zip(held, expected, strict=True):
+        truth = {v.lower() for _, v in _sensitive_values(doc)}
+        for *_, v in rs.find(line):
+            if v.lower() in truth:
+                true_hits += 1
+            else:
+                other += 1
+    return {
+        "fixture": fx.name,
+        "model": llm.endpoint.model,
+        "think": llm.endpoint.think,
+        "rules": len(rules),
+        "key_rules": sum(r.rtype == "key" for r in rules),
+        "value_rules": sum(r.rtype == "value" for r in rules),
+        "values": before["values"],
+        "leaked_before": before["leaked"],
+        "leaked_after": after["leaked"],
+        "caught_sensitive": true_hits,
+        "caught_other": other,
+        "llm_s": round(llm_s, 1),
+    }
+
+
+def learning_summary(rows: list[dict]) -> dict:
+    tot = {k: sum(r[k] for r in rows) for k in ("values", "leaked_before", "leaked_after")}
+    caught = sum(r["caught_sensitive"] for r in rows)
+    other = sum(r["caught_other"] for r in rows)
+    return {
+        "fixtures": len(rows),
+        **tot,
+        "leak_rate_before": round(tot["leaked_before"] / tot["values"], 4) if tot["values"] else 0,
+        "leak_rate_after": round(tot["leaked_after"] / tot["values"], 4) if tot["values"] else 0,
+        "rules": sum(r["rules"] for r in rows),
+        "precision": round(caught / (caught + other), 3) if caught + other else None,
+    }

@@ -18,3 +18,4 @@ build/
 
 # generated from approved parsers (privasoc serve / vector-config)
 vector/pipeline.yaml
+*.cache.json

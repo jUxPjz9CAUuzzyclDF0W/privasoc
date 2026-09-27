@@ -226,3 +226,26 @@ def test_missing_vector_is_reported_not_a_crash(tmp_path):
     r = c.post("/ui/parser/approve", data={"id": "p1", "csrf": csrf(c)})
     assert r.status_code == 303 and "level=error" in r.headers["location"]
     assert store.parser("p1")["status"] == "proposed"  # rolled back
+
+
+def test_pseudonymisation_rules_page(tmp_path):
+    c, store = make(tmp_path)
+    store.ingest([Record("nas", "backup finished on nas-cave for carol")], auto_approve=True)
+    login(c)
+    assert "Ask the local model" in c.get("/ui/rules").text
+    r = c.post(
+        "/ui/rules/add",
+        data={"rtype": "value", "kind": "host", "pattern": "nas-cave", "csrf": csrf(c)},
+    )
+    assert r.status_code == 303 and r.headers["location"].startswith("/ui/rule?id=")
+    rid = r.headers["location"].split("id=")[1].split("&")[0]
+    page = c.get("/ui/rule", params={"id": rid}).text
+    assert "of 1 lines changed" in page and "nas-cave" in page
+    r = c.post("/ui/rule/approve", data={"id": rid, "csrf": csrf(c)})
+    assert "approved" in r.headers["location"]
+    q = c.get("/ui/quarantine", params={"source": "nas"}).text
+    assert "nas-cave" not in q  # the approved rule now applies to the display too
+    bad = c.post(
+        "/ui/rules/add", data={"rtype": "key", "kind": "user", "pattern": "msg", "csrf": csrf(c)}
+    )
+    assert "level=error" in bad.headers["location"]

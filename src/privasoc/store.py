@@ -360,6 +360,23 @@ class Store:
         out["parsers_approved"] = one("SELECT COUNT(*) FROM parsers WHERE status='approved'")
         return out
 
+    def recent_raw(self, source: str | None = None, limit: int = 500) -> list[str]:
+        """Latest raw lines of approved hosts: quarantined ones and the originals kept in
+        normalised events (step 5 learns from both). Held lines are never included."""
+        args = (source, source, limit)
+        q = self.conn.execute(
+            "SELECT raw FROM unparsed WHERE held=0 AND (? IS NULL OR source=?) "
+            "ORDER BY id DESC LIMIT ?",
+            args,
+        ).fetchall()
+        e = self.conn.execute(
+            "SELECT json_extract(ecs, '$.event.original') FROM events "
+            "WHERE json_extract(ecs, '$.event.original') IS NOT NULL "
+            "AND (? IS NULL OR source=?) ORDER BY id DESC LIMIT ?",
+            args,
+        ).fetchall()
+        return [r[0] for r in q + e][:limit]
+
     def held_sample(self, source: str, limit: int = 10) -> list[str]:
         """Latest lines of a pending host, for the approval decision."""
         rows = self.conn.execute(

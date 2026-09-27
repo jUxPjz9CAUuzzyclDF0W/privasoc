@@ -86,6 +86,8 @@ uv run privasoc propose --source pihole                      # the LLM writes a 
 uv run privasoc parsers show <id>                            # VRL, checks, preview
 uv run privasoc parsers approve <id>                         # human decision + backfill
 uv run privasoc hosts list                                   # senders, status, health
+uv run privasoc rules learn --source pihole                  # local model: what is missed?
+uv run privasoc rules preview <id> ; uv run privasoc rules approve <id>
 uv run privasoc serve                                        # API + review UI
 ```
 
@@ -134,6 +136,7 @@ encrypted vault so answers can be re-identified for display only.
 ```bash
 uv run privasoc eval fetch                      # Elastic ground truth, 10 formats (not redistributed)
 uv run privasoc eval leak                       # pseudonymisation leakage, no LLM needed
+uv run privasoc eval learn --set dev            # step 5: learned rules, held-out leakage
 uv run privasoc eval run --runs 3 --modes structured,vrl --pseudo on,off
 uv run privasoc eval report                     # reports/eval.md + reports/eval.html
 ```
@@ -158,6 +161,22 @@ little quality; and field mapping on unseen formats is where the remaining gap i
 Pseudonymisation leakage went from 26.8 % (first regex detectors) to 8.1 % after the
 detectors were improved against these measurements.
 
+**Learned pseudonymisation** (step 5): the local model reads the lines of a source after
+pseudonymisation and lists names still in clear; privasoc turns them into rules (the key they
+follow, the words around them, or the value itself) that a human approves after a preview.
+Measured with every proposal accepted, rules learned on half of each format and leakage
+measured on the other half:
+
+| | leaked before | leaked after | rules | precision |
+|---|---|---|---|---|
+| dev (10 formats) | 8.9 % | **3.9 %** | 9 | 0.85 |
+| holdout (4 formats) | 2.4 % | 2.4 % | 2 | n/a |
+
+The gain comes from formats with names in positional columns or sentences (squid, Cisco
+ASA); on the holdout formats the detectors already caught almost everything. The learning
+pass sends clear-text lines, so it only talks to a model on this machine or the local
+network (checked in code); before any remote API call it runs on the samples first.
+
 ## Privacy model
 
 | Guarantee | How |
@@ -166,9 +185,10 @@ detectors were improved against these measurements.
 | Deterministic, reversible only locally | Keyed HMAC pseudonyms; Fernet-encrypted vault, mode 600, git-ignored |
 | No secret or personal log in git | `.gitignore` for `data/` and `.env`; `gitleaks` in pre-commit and CI |
 | Remote API is opt-in | Local model by default; API only on explicit action or configured fallback, every call logged |
+| What regexes miss is learned | Local-only model pass proposes rules (key, context, value), encrypted in the vault, human-approved; it also runs before every remote call |
 
 Known limits are documented rather than hidden: regex detection has residual leakage
-on free text; step 5 adds a local-LLM pass and the evaluation publishes the rate.
+on free text; step 5 adds a local-LLM pass and the evaluation publishes both rates.
 
 ## Roadmap
 
@@ -177,8 +197,7 @@ on free text; step 5 adds a local-LLM pass and the evaluation publishes the rate
 3. **Parser evaluation** on Elastic integration fixtures + HTML report. ✅
    Source onboarding (pending hosts, known formats first, backfill) and host health. ✅
 4. **Web review UI**: hosts, health, parser review, quarantine, events. ✅
-   (The page for learned pseudonymisation comes with step 5.)
-5. Local-LLM pseudonymisation that learns (human-approved).
+5. **Local-LLM pseudonymisation that learns** (human-approved rules, UI page). ✅
 6. Sigma detection + alerts + structured AI triage.
 7. AI-written Sigma rules, natural-language hunting.
 8. Triage evaluation; Windows and Proxmox collection.

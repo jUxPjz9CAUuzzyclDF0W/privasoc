@@ -237,6 +237,7 @@ _CLF_USER = re.compile(  # Common/Combined Log Format: host ident authuser [date
 )
 _URL_HOST = re.compile(r"\b[a-zA-Z][\w+.-]*://(?:[^@/\s]*@)?(?P<host>[\w.-]+)")
 _HEXRUN = re.compile(r"[0-9A-Fa-f:]{4,}")
+_FINGERPRINT = re.compile(r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){7,}")
 
 
 def _ipv6_candidates(text: str):
@@ -246,6 +247,8 @@ def _ipv6_candidates(text: str):
         s = run.group(0)
         if s.count(":") < 2:
             continue
+        if _FINGERPRINT.fullmatch(s):
+            continue  # an SSH/TLS key fingerprint (aa:bb:...), not an address
         starts = [0] + [i + 1 for i, c in enumerate(s) if c == ":"]
         for st in starts:
             cand = s[st:].rstrip(":") if not s.endswith("::") else s[st:]
@@ -254,8 +257,11 @@ def _ipv6_candidates(text: str):
                 break
 
 
-def detect(text: str) -> list[Entity]:
-    """Return non-overlapping sensitive entities, sorted by position."""
+def detect(text: str, rules=None) -> list[Entity]:
+    """Return non-overlapping sensitive entities, sorted by position.
+
+    `rules` is an optional learned RuleSet (step 5): its matches compete with the built-in
+    detectors under the same priorities."""
     found: list[Entity] = []
 
     def add(kind: str, m: re.Match, group: int | str = 0) -> None:
@@ -311,6 +317,10 @@ def detect(text: str) -> list[Entity]:
         if val.lower() in _KV_SKIP or len(val) < 2 or val.lower().startswith("unknown"):
             continue
         add("user" if m.group("ukey") else "host", m, g)
+
+    if rules is not None:
+        for kind, a, b, v in rules.find(text):
+            found.append(Entity(kind, a, b, v))
 
     # Resolve overlaps: highest priority, then longest span, wins.
     found.sort(key=lambda e: (-PRIORITY[e.kind], -(e.end - e.start), e.start))

@@ -213,6 +213,79 @@ def pseudo(
             typer.echo(r.text)
 
 
+rules_app = typer.Typer(
+    help="Learned pseudonymisation rules (step 5): proposed by the local model, approved by you.",
+    no_args_is_help=True,
+)
+app.add_typer(rules_app, name="rules")
+
+
+@rules_app.command("list")
+def rules_list(status: str | None = None) -> None:
+    """Rules with their status (patterns are shown: this is a local terminal)."""
+    rows = _do(service.list_rules, get_settings(), status)
+    if not rows:
+        typer.echo("No rule yet: privasoc rules learn --source <host>")
+    for r in rows:
+        typer.echo(f"{r.id}  {r.status:9} {r.kind:5} {r.origin:6} {r.label()}")
+
+
+@rules_app.command("learn")
+def rules_learn(source: Annotated[str, typer.Option(help="Approved host to learn from")]) -> None:
+    """Ask the LOCAL model what the detectors still miss; results are proposals."""
+    s = get_settings()
+    out = _do(
+        service.learn_rules, Store(s.db_path), s, source, progress=lambda m: typer.echo(f"  {m}")
+    )
+    if not out:
+        typer.echo("Nothing new: the local model found no residual personal data.")
+    for r in out:
+        state = "new" if r["new"] else f"already {r['status']}"
+        typer.echo(
+            f"{r['id']}  {state:17} {r['kind']:5} {r['label']}  changes {r['changed']} lines"
+        )
+    if any(r["new"] for r in out):
+        typer.echo("Review with: privasoc rules preview <id>, then approve or reject.")
+
+
+@rules_app.command("add")
+def rules_add(
+    rtype: Annotated[str, typer.Argument(help="key, regex or value")],
+    kind: Annotated[str, typer.Argument(help="user or host")],
+    pattern: str,
+    approve: Annotated[bool, typer.Option(help="Approve at once")] = False,
+) -> None:
+    """Add a rule by hand, e.g. `privasoc rules add key user cs1`."""
+    r = _do(service.add_rule, get_settings(), rtype, kind, pattern, approve)
+    typer.echo(f"{r.id} {r.status}: {r.label()}")
+
+
+@rules_app.command("preview")
+def rules_preview(rule_id: str, source: str | None = None) -> None:
+    """What a rule would change on the latest real lines (local display only)."""
+    s = get_settings()
+    p = _do(service.rule_preview, Store(s.db_path), s, rule_id, source)
+    r = p["rule"]
+    typer.echo(f"{r.id} {r.status} {r.kind} {r.label()}  ({r.origin}) {r.note}")
+    typer.echo(f"changes {p['changed']} of {p['lines']} lines; {p['distinct']} distinct values:")
+    for v, n in p["values"]:
+        typer.echo(f"  {n:>5}  {v}")
+    for ex in p["examples"]:
+        typer.echo(f"before: {ex['before']}\nafter:  {ex['after']}\n")
+
+
+@rules_app.command("approve")
+def rules_approve(rule_id: str) -> None:
+    r = _do(service.set_rule_status, get_settings(), rule_id, "approved")
+    typer.echo(f"{r.id} approved: {r.label()} now applies to every pseudonymisation")
+
+
+@rules_app.command("reject")
+def rules_reject(rule_id: str) -> None:
+    r = _do(service.set_rule_status, get_settings(), rule_id, "rejected")
+    typer.echo(f"{r.id} rejected: it will not be proposed again")
+
+
 parsers_app = typer.Typer(help="Review AI-generated parsers (D23).", no_args_is_help=True)
 app.add_typer(parsers_app, name="parsers")
 
@@ -355,6 +428,71 @@ def eval_leak(out: Path = Path("reports/leakage.json")) -> None:
     )
     for field, v in result["per_field"].items():
         typer.echo(f"  {field:24} {v['leaked']:>4}/{v['total']:<4} {v['rate']:.0%}")
+
+
+@eval_app.command("learn")
+def eval_learn(
+    fixture_set: Annotated[str, typer.Option("--set", help="dev, holdout or all")] = "dev",
+    results: Path = Path("evaluation/results-learn.jsonl"),
+    budget: Annotated[float, typer.Option(help="Stop after this many seconds")] = 0,
+) -> None:
+    """Step 5: learn rules on half of each fixture (local model), measure leakage on the other
+    half. Resumable: fixtures already in the results file are skipped."""
+    import json
+    import time
+
+    from privasoc import evaluation, fixtures
+    from privasoc.pseudo import Pseudonymizer, Vault
+
+    s = get_settings()
+    llm = _do(service._local_llm, Store(s.db_path), s)
+    done = set()
+    if results.exists():
+        done = {
+            (r["fixture"], r["model"], r.get("think", False))
+            for r in map(json.loads, results.read_text(encoding="utf-8").splitlines())
+        }
+
+    def fresh_pz():  # throwaway vault: an evaluation never touches the real one
+        return Pseudonymizer(Vault(":memory:", secrets.token_bytes(32), Fernet.generate_key()))
+
+    # Model answers are cached per batch (local file next to the results, it holds
+    # fixture text): an interrupted run resumes without asking the model again.
+    cache_path = results.with_suffix(".cache.json")
+
+    class Cache(dict):
+        def __setitem__(self, k, v):
+            super().__setitem__(k, v)
+            cache_path.write_text(json.dumps(self), encoding="utf-8")
+
+    cache = Cache(json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {})
+    t0 = time.monotonic()
+    results.parent.mkdir(parents=True, exist_ok=True)
+    for fx in fixtures.load(_fixture_dir(s), fixtures.SETS[fixture_set]):
+        if (fx.name, llm.endpoint.model, llm.endpoint.think) in done:
+            continue
+        if budget and time.monotonic() - t0 > budget:
+            typer.echo("budget reached; run again to continue")
+            return
+        typer.echo(f"{fx.name}:")
+        row = evaluation.learning_one(
+            fx,
+            fresh_pz,
+            llm,
+            s.learn_sample,
+            s.learn_batch,
+            progress=lambda m: typer.echo(f"  {m}"),
+            cache=cache,
+        )
+        with results.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+        typer.echo(
+            f"  leaked {row['leaked_before']} -> {row['leaked_after']} of {row['values']}; "
+            f"{row['rules']} rules; caught {row['caught_sensitive']} sensitive, "
+            f"{row['caught_other']} other"
+        )
+    rows = [json.loads(x) for x in results.read_text(encoding="utf-8").splitlines()]
+    typer.echo(json.dumps(evaluation.learning_summary(rows), indent=2))
 
 
 @eval_app.command("run")

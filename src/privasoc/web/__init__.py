@@ -161,6 +161,7 @@ def create_router(settings: Settings, store: Store, lock: threading.RLock) -> AP
             pending=[h for h in hosts if h["status"] == "pending"],
             unhealthy=[h for h in hosts if h["health"] and h["health"]["status"] != "ok"],
             proposed=proposed,
+            rules_proposed=len(service.list_rules(settings, "proposed")),
         )
 
     # ------------------------------------------------------------------ hosts (D45, D47)
@@ -344,6 +345,76 @@ def create_router(settings: Settings, store: Store, lock: threading.RLock) -> AP
     @router.post("/parser/reject", dependencies=post)
     def parser_reject(id: Annotated[str, Form()]) -> Response:  # noqa: A002
         return parser_decision(id, "rejected")
+
+    # ------------------------------------------------------------------ pseudonymisation (step 5)
+
+    @router.get("/rules", dependencies=auth)
+    def rules_page(request: Request, status: str = "") -> HTMLResponse:
+        rules = service.list_rules(settings, status or None)
+        with lock:
+            hosts = [h["source"] for h in store.hosts("approved")]
+        return page(request, "rules.html", rules=list(reversed(rules)), status=status, hosts=hosts)
+
+    @router.get("/rule", dependencies=auth)
+    def rule_page(request: Request, id: str, source: str = "") -> HTMLResponse:  # noqa: A002
+        try:
+            with lock:
+                p = service.rule_preview(store, settings, id, source or None)
+                hosts = [h["source"] for h in store.hosts("approved")]
+        except service.ActionError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return page(request, "rule.html", p=p, r=p["rule"], source=source, hosts=hosts)
+
+    def rule_url(rid: str) -> str:
+        return "/ui/rule?" + urlencode({"id": rid})
+
+    @router.post("/rules/add", dependencies=post)
+    def rules_add(
+        rtype: Annotated[str, Form()],
+        kind: Annotated[str, Form()],
+        pattern: Annotated[str, Form()],
+    ) -> Response:
+        try:
+            r = service.add_rule(settings, rtype, kind, pattern)
+        except service.ActionError as exc:
+            return back("/ui/rules", str(exc), "error")
+        return back(rule_url(r.id), "rule added: check its effect below, then approve it")
+
+    @router.post("/rules/learn", dependencies=post)
+    def rules_learn(source: Annotated[str, Form()]) -> Response:
+        def work(say):
+            job_store = Store(store.path)
+            try:
+                found = service.learn_rules(job_store, settings, source, say)
+                return {"rules": found}
+            finally:
+                job_store.close()
+
+        try:
+            job = jobs.start("learn", source, work)
+        except RuntimeError as exc:
+            return back("/ui/rules", str(exc), "error")
+        return RedirectResponse(f"/ui/job?id={job.id}", status_code=303)
+
+    def rule_decision(rid: str, status: str) -> Response:
+        try:
+            r = service.set_rule_status(settings, rid, status)
+        except service.ActionError as exc:
+            return back(rule_url(rid), str(exc), "error")
+        msg = (
+            "approved: applies to every pseudonymisation from now on"
+            if status == "approved"
+            else "rejected: it will not be proposed again"
+        )
+        return back(rule_url(r.id), f"{r.label()} {msg}")
+
+    @router.post("/rule/approve", dependencies=post)
+    def rule_approve(id: Annotated[str, Form()]) -> Response:  # noqa: A002
+        return rule_decision(id, "approved")
+
+    @router.post("/rule/reject", dependencies=post)
+    def rule_reject(id: Annotated[str, Form()]) -> Response:  # noqa: A002
+        return rule_decision(id, "rejected")
 
     # ------------------------------------------------------------------ data
 

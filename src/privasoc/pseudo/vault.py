@@ -26,6 +26,17 @@ CREATE TABLE IF NOT EXISTS mapping (
     enc    BLOB NOT NULL,
     PRIMARY KEY (kind, digest)
 );
+CREATE TABLE IF NOT EXISTS rules (          -- step 5: learned pseudonymisation rules
+    id         TEXT PRIMARY KEY,
+    rtype      TEXT NOT NULL,               -- key | regex | value
+    kind       TEXT NOT NULL,               -- user | host
+    enc        BLOB NOT NULL,               -- pattern, encrypted (it may be personal data)
+    status     TEXT NOT NULL,               -- proposed | approved | rejected
+    origin     TEXT NOT NULL,               -- human | llm
+    note       BLOB,                        -- encrypted reason / context
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
 """
 MAX_SALT = 64
 
@@ -80,6 +91,66 @@ class Vault:
                 "SELECT enc FROM mapping WHERE token=? COLLATE NOCASE", (token,)
             ).fetchone()
         return self._fernet.decrypt(row[0]).decode() if row else None
+
+    # ------------------------------------------------------------------ learned rules
+
+    def add_rule(self, rule) -> bool:
+        """Store a rule; False if the same rule already exists (whatever its status, so a
+        rejected proposal is never proposed again)."""
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC).isoformat(timespec="seconds")
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO rules(id, rtype, kind, enc, status, origin, note, "
+                "created_at, decided_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    rule.id,
+                    rule.rtype,
+                    rule.kind,
+                    self._fernet.encrypt(rule.pattern.encode()),
+                    rule.status,
+                    rule.origin,
+                    self._fernet.encrypt(rule.note.encode()) if rule.note else None,
+                    now,
+                    now if rule.status != "proposed" else None,
+                ),
+            )
+        return cur.rowcount == 1
+
+    def rules(self, status: str | None = None) -> list:
+        from privasoc.pseudo.rules import Rule
+
+        q, args = "SELECT rtype, kind, enc, status, origin, note, created_at FROM rules", ()
+        if status:
+            q, args = q + " WHERE status=?", (status,)
+        with self._lock:
+            rows = self._conn.execute(q + " ORDER BY created_at, id", args).fetchall()
+        return [
+            Rule(
+                rtype,
+                kind,
+                self._fernet.decrypt(enc).decode(),
+                st,
+                origin,
+                self._fernet.decrypt(note).decode() if note else "",
+                created,
+            )
+            for rtype, kind, enc, st, origin, note, created in rows
+        ]
+
+    def rule(self, rule_id: str):
+        return next((r for r in self.rules() if r.id == rule_id), None)
+
+    def set_rule_status(self, rule_id: str, status: str) -> bool:
+        from datetime import UTC, datetime
+
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE rules SET status=?, decided_at=? WHERE id=?",
+                (status, datetime.now(UTC).isoformat(timespec="seconds"), rule_id),
+            )
+        return cur.rowcount == 1
 
     def __len__(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM mapping").fetchone()[0]

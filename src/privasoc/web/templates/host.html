@@ -81,6 +81,18 @@
 {% endif %}
 {% endif %}
 
+{% if host.status == "approved" %}
+<h2>Pseudonymisation</h2>
+<div class="panel">
+  <form method="post" action="/ui/rules/learn" class="actions">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="source" value="{{ host.source }}">
+    <button>Ask the local model what the detectors miss</button>
+    <a href="/ui/rules">all rules</a>
+  </form>
+</div>
+{% endif %}
+
 {% if parsers %}
 <h2>Parsers for this host</h2>
 <div class="panel"><table>
