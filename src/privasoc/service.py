@@ -437,7 +437,9 @@ def engine(s: Settings, reload: bool = False):
     from privasoc.detect.engine import Engine, rule_dirs
     from privasoc.detect.sigma import Unsupported, compile_text, load_rules
 
-    key = str(s.sigma_dir)
+    # Approved and disabled rules live in the database, so the cache must not be shared by
+    # two installations that happen to use the same SigmaHQ directory.
+    key = (str(s.sigma_dir.resolve()), str(s.db_path.resolve()))
     if reload or key not in _ENGINE:
         rules = load_rules(rule_dirs(s.sigma_dir))
         store = Store(s.db_path)
@@ -663,14 +665,19 @@ def _summary(bt: dict, keep: int = 50) -> dict:
 def _fp_effect(store: Store, rule_id: str, rules) -> dict:
     """Would the derived rule still match the events of past alerts of the original one?"""
     from privasoc.detect import alerts as al
+    from privasoc.detect.engine import backtest_events, event_time
 
-    base = [r for r in rules if r.unsupported is None and not r.correlation]
     out = {"fp": 0, "fp_removed": 0, "tp": 0, "tp_kept": 0, "tp_lost": []}
     for a in al.alerts(store, "all", limit=1000):
         if a["rule_id"] != rule_id or a["status"] not in ("closed_fp", "closed_tp"):
             continue
         evs = al.alert_events(store, a["id"], 200)
-        hit = any(r.applies(e["ecs"]) and r.match(e["ecs"]) for r in base for e in evs)
+        evidence = [
+            (e["id"], e["source"], event_time(e["ecs"], e["received_at"]), e["ecs"])
+            for e in reversed(evs)
+        ]
+        bt = backtest_events(rules, evidence)
+        hit = any(r["kind"] != "base" and r["matches"] for r in bt["results"])
         if a["status"] == "closed_fp":
             out["fp"] += 1
             out["fp_removed"] += not hit
@@ -718,6 +725,8 @@ def author_rule(
             raise ActionError("this alert has no event to learn from")
         examples = [{"id": e["id"], "ecs": e["ecs"]} for e in evs]
         if origin == "false_positive":
+            if a["status"] != "closed_fp":
+                raise ActionError("the alert must be closed as a false positive first")
             original = find_rule(s, a["rule_id"])
             if not original:
                 raise ActionError("the rule of this alert is not loaded any more")
@@ -746,7 +755,8 @@ def author_rule(
     try:
         if provider == "remote" and s.remote_residual_pass:
             raw = [str((e["ecs"].get("event") or {}).get("original") or "") for e in examples]
-            pz = pz.with_rules(_local_residual_rules(store, s, [request, *filter(None, raw)], say))
+            residual_input = [request, extra, *filter(None, raw)]
+            pz = pz.with_rules(_local_residual_rules(store, s, residual_input, say))
         llm = LLMClient(_endpoint(s, provider), call_log=store.log_llm_call,
                         timeout=s.llm_timeout, max_tokens=s.llm_max_tokens,
                         num_ctx=s.llm_num_ctx)  # fmt: skip

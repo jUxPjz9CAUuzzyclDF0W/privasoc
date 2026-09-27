@@ -194,7 +194,6 @@ def backtest(store: Store, rules: list[Rule], hours: float | None = None, limit:
     whose count reaches the threshold in some window, with the events of the best window."""
     from datetime import UTC, datetime
 
-    eng = Engine(rules)
     rows = store.conn.execute(
         "SELECT id, source, received_at, ecs FROM events ORDER BY id DESC LIMIT ?", (limit,)
     ).fetchall()
@@ -208,6 +207,17 @@ def backtest(store: Store, rules: list[Rule], hours: float | None = None, limit:
         if since and at < since:
             continue
         events.append((eid, source, at, ecs))
+    return backtest_events(rules, events)
+
+
+def backtest_events(rules: list[Rule], events: list[tuple]) -> dict:
+    """Run a side-effect-free backtest over explicit ``(id, source, at, ecs)`` events.
+
+    Keeping this path shared with stored-event backtests is important for false-positive
+    fixes: an alert is preserved only if the complete candidate rule, including any Sigma
+    correlation threshold, would still raise on that alert's evidence.
+    """
+    eng = Engine(rules)
     matches: dict[str, list[tuple]] = {r.id: [] for r in eng.base}
     for ev in events:
         for r in eng.base:

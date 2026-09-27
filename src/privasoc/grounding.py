@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 from typing import Any
 
 from privasoc.ecs import ALLOWED, flatten
@@ -36,13 +37,26 @@ def _grounded(path: str, value: Any, raw: str, low: str) -> bool:
     ):
         return True
     m = _ISO.match(s)
-    if m:
+    if m and path == "@timestamp":
         y, mo, d, h, mi, se = m.groups()
         if f"{h}:{mi}:{se}" in raw or f"{y}-{mo}-{d}" in raw:
             return True
         # A timezone offset shifts the hour (and maybe the day), never minutes and seconds.
         if y in raw and f":{mi}:{se}" in raw:
             return True
+        # RFC 3164 syslog has no year or offset. Vector supplies the current year and renders
+        # the parsed local time in UTC. Require both the unchanged minute/second and the raw
+        # month/day (allowing one day of offset at midnight); the year alone is not grounded.
+        if f":{mi}:{se}" in raw:
+            try:
+                output_day = date(int(y), int(mo), int(d))
+            except ValueError:
+                return False
+            for delta in (-1, 0, 1):
+                raw_day = output_day + timedelta(days=delta)
+                month = raw_day.strftime("%b")
+                if re.search(rf"\b{month}\s+0?{raw_day.day}\b", raw, re.IGNORECASE):
+                    return True
         return bool(re.search(r"\b1\d{9}\b", raw))  # epoch seconds
     return False
 

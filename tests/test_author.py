@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 
@@ -11,7 +12,7 @@ from privasoc import bench_hunt, service
 from privasoc.config import Settings
 from privasoc.detect import alerts as al
 from privasoc.detect import author, authored
-from privasoc.detect.engine import backtest
+from privasoc.detect.engine import BUILTIN_RULES, Engine, backtest, load_rules
 from privasoc.detect.sigma import compile_text
 from privasoc.store import Record, Store
 from tests.test_learn import _server
@@ -41,6 +42,33 @@ correlation: {type: event_count, rules: [nope], group-by: [source.ip], timespan:
     ok = "```yaml\ntitle: t\ndetection:\n  s: {process.name: sshd}\n  condition: s\n```"
     rules, errors, _ = author.check(ok, KNOWN)
     assert errors == [] and rules[0].match({"process": {"name": "sshd"}})
+
+
+def test_check_replaces_model_ids_and_names_with_isolated_ones():
+    text = """title: base
+id: existing-rule-id
+name: shared_name
+detection:
+  s: {process.name: sshd}
+  condition: s
+---
+title: correlation
+id: another-existing-id
+correlation:
+  type: event_count
+  rules: [shared_name]
+  group-by: [source.ip]
+  timespan: 5m
+  condition: {gte: 3}
+"""
+    rules, errors, normalised = author.check(text, KNOWN)
+    assert errors == []
+    docs = list(yaml.safe_load_all(normalised))
+    assert all(d["id"] not in {"existing-rule-id", "another-existing-id"} for d in docs)
+    assert docs[0]["name"].startswith("ai_")
+    assert docs[1]["correlation"]["rules"] == [docs[0]["name"]]
+    eng = Engine(rules)
+    assert len(eng.correlations) == 1 and eng.correlations[0].unsupported is None
 
 
 def _bench_store():
@@ -186,6 +214,111 @@ level: high
         assert any(r.origin == "ai" for r in eng.correlations)
         service.decide_rule(store, s, out["id"], "disabled")
         assert not any(r.disabled for r in service.engine(s).rules if r.origin == "privasoc")
+    finally:
+        srv.shutdown()
+
+
+def test_false_positive_effect_honours_the_correlation_threshold(tmp_path):
+    from tests.test_detect import ev, ssh_fail
+
+    store = Store(tmp_path / "d.db")
+    store.ingest([ev(i, ssh_fail("203.0.113.9", i)) for i in range(12)], auto_approve=True)
+    Engine(load_rules([(BUILTIN_RULES, "privasoc")])).run(store)
+    (alert,) = al.alerts(store, "open")
+    al.set_status(store, alert["id"], "closed_tp")
+    candidate = compile_text(
+        """title: narrowed base
+name: narrowed
+logsource: {product: privasoc}
+detection:
+  one: {event.original|endswith: 'port 0'}
+  condition: one
+---
+title: narrowed correlation
+correlation:
+  type: event_count
+  rules: [narrowed]
+  group-by: [source.ip]
+  timespan: 5m
+  condition: {gte: 10}
+""",
+        "ai",
+    )
+    effect = service._fp_effect(store, alert["rule_id"], candidate)
+    assert effect == {
+        "fp": 0,
+        "fp_removed": 0,
+        "tp": 1,
+        "tp_kept": 0,
+        "tp_lost": [alert["id"]],
+    }
+
+
+def test_false_positive_authoring_requires_a_false_positive_verdict(tmp_path):
+    from tests.test_detect import ev, ssh_fail
+
+    s = _settings(tmp_path, "http://127.0.0.1:1/v1")
+    store = Store(s.db_path)
+    store.ingest([ev(i, ssh_fail("203.0.113.9", i)) for i in range(12)], auto_approve=True)
+    Engine(load_rules([(BUILTIN_RULES, "privasoc")])).run(store)
+    (alert,) = al.alerts(store, "open")
+    with pytest.raises(service.ActionError, match="closed as a false positive"):
+        service.author_rule(store, s, "false_positive", ref=alert["id"])
+
+
+def test_engine_cache_is_isolated_by_database(tmp_path):
+    from pathlib import Path
+
+    first = SimpleNamespace(sigma_dir=Path(tmp_path / "sigma"), db_path=Path(tmp_path / "a.db"))
+    second = SimpleNamespace(sigma_dir=first.sigma_dir, db_path=Path(tmp_path / "b.db"))
+    yaml_text = """title: local
+id: local-rule
+logsource: {product: privasoc}
+detection:
+  s: {process.name: sshd}
+  condition: s
+"""
+    one = Store(first.db_path)
+    Store(second.db_path).close()
+    authored.save(one, "proposal", yaml_text, "local", "request")
+    authored.set_status(one, "proposal", "approved")
+    one.close()
+    service._ENGINE.clear()
+    assert any(r.origin == "ai" for r in service.engine(first).rules)
+    assert not any(r.origin == "ai" for r in service.engine(second).rules)
+
+
+def test_remote_false_positive_pass_checks_the_current_rule(tmp_path, monkeypatch):
+    from tests.test_detect import ev, ssh_fail
+
+    answer = """```yaml
+title: narrowed SSH failures
+logsource: {product: privasoc}
+detection:
+  s: {event.original|contains: Failed password}
+  condition: s
+```"""
+    srv, _ = _server(lambda _p: answer)
+    captured = []
+    try:
+        url = f"http://127.0.0.1:{srv.server_port}/v1"
+        s = _settings(tmp_path, url)
+        s.llm_remote_url = url
+        s.llm_remote_model = "m"
+        store = Store(s.db_path)
+        store.ingest([ev(i, ssh_fail("203.0.113.9", i)) for i in range(12)], auto_approve=True)
+        Engine(load_rules([(BUILTIN_RULES, "privasoc")])).run(store)
+        (alert,) = al.alerts(store, "open")
+        al.set_status(store, alert["id"], "closed_fp")
+
+        def residual(_store, _settings, lines, _say):
+            captured.extend(lines)
+            return []
+
+        monkeypatch.setattr(service, "_local_residual_rules", residual)
+        out = service.author_rule(store, s, "false_positive", ref=alert["id"], provider="remote")
+        assert out["status"] == "proposed"
+        assert any("Current rule:" in line and "correlation:" in line for line in captured)
     finally:
         srv.shutdown()
 

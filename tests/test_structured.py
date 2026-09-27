@@ -263,6 +263,9 @@ def test_timestamp_converted_to_utc_is_still_grounded():
     raw = '1.2.3.4 - - [25/Oct/2016:14:49:33 +0200] "GET / HTTP/1.1" 200 612'
     assert ungrounded({"@timestamp": "2016-10-25T12:49:33Z"}, raw) == []
     assert ungrounded({"@timestamp": "2016-10-25T12:50:00Z"}, raw) != []
+    yearless = "Sep 26 10:01:02 dnsmasq[812]: query[A] example.test"
+    assert ungrounded({"@timestamp": "2026-09-26T08:01:02Z"}, yearless) == []
+    assert ungrounded({"@timestamp": "2026-09-24T08:01:02Z"}, yearless) != []
 
 
 @needs_vector

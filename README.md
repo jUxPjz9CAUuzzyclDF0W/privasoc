@@ -9,8 +9,8 @@ tests it in Vector's sandbox, and asks a human to approve it. Nothing leaves you
 machine un-pseudonymised: every prompt, local or remote, goes through a
 shape-preserving pseudonymisation layer, and leakage is measured, not assumed.
 
-> Status: **steps 1-3 of 8 done** (core, parser generation, evaluation) plus source
-> onboarding and host health. See the [roadmap](#roadmap) and every design
+> Status: **steps 1-7 of 8 done**; triage evaluation and Windows/Proxmox collection remain.
+> See the [roadmap](#roadmap) and every design
 > decision, with its rationale, in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Why, and what it is not
@@ -206,7 +206,9 @@ Ask a question about past events or describe what to detect; the local model ans
 Sigma rule (never SQL), written on pseudonymised examples, which privasoc checks with the
 same engine, re-identifies and **backtests** on the stored events. An alert closed as a
 false positive can be turned into a fix of its rule, shown with the past alerts it would
-remove and, above all, any true positive it would hide. Nothing runs until you approve it.
+remove and, above all, any true positive it would hide. This comparison executes the whole
+candidate, including correlation thresholds, on each alert's evidence. Generated ids and
+names are isolated from every loaded rule. Nothing runs until you approve it.
 
 On a hand-written bench (synthetic events with a known answer, `qwen3:8b`, 3 runs per
 request):
@@ -231,7 +233,7 @@ uv run privasoc eval hunt --set all --runs 3
 
 | Guarantee | How |
 |---|---|
-| No original value in any prompt | Typed detectors + key=value heuristics + propagation; automatic leak check before sending |
+| No original value in any prompt | Typed detectors + key=value heuristics + propagation; automatic leak check before sending; the local residual pass also checks existing rule text before remote rule authoring |
 | Deterministic, reversible only locally | Keyed HMAC pseudonyms; Fernet-encrypted vault, mode 600, git-ignored |
 | No secret or personal log in git | `.gitignore` for `data/` and `.env`; `gitleaks` in pre-commit and CI |
 | Remote API is opt-in | Local model by default; API only on explicit action or configured fallback, every call logged |

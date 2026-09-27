@@ -190,10 +190,23 @@ def check(text: str, known_fields: set[str]) -> tuple[list, list[str], str | Non
     errors = []
     if not any("detection" in d for d in docs):
         errors.append("there is no rule with a `detection` section")
+    namespace = "ai_" + uuid.uuid4().hex[:12]
+    aliases: dict[str, str] = {}
+    detection_index = 0
     for d in docs:
-        d.setdefault("id", str(uuid.uuid4()))
+        old_id = str(d.get("id") or "")
+        old_name = str(d.get("name") or "")
+        d["id"] = str(uuid.uuid4())
         d.setdefault("status", "experimental")
         if "detection" in d:
+            safe_name = f"{namespace}_{detection_index}"
+            detection_index += 1
+            d["name"] = safe_name
+            for alias in filter(None, (old_id, old_name)):
+                if alias in aliases and aliases[alias] != safe_name:
+                    errors.append(f"duplicate rule id or name {alias!r}")
+                else:
+                    aliases[alias] = safe_name
             d["logsource"] = {"product": "privasoc"}
         for k, v in (d.get("detection") or {}).items():
             items = v if isinstance(v, list) else [v]
@@ -212,6 +225,22 @@ def check(text: str, known_fields: set[str]) -> tuple[list, list[str], str | Non
                 near = difflib.get_close_matches(f, list(known_fields), n=3, cutoff=0.5)
                 hint = f"; did you mean {', '.join(near)}" if near else ""
                 errors.append(f"field {f!r} does not occur in the events{hint}")
+    for d in docs:
+        correlation = d.get("correlation") or {}
+        refs = correlation.get("rules") or []
+        if isinstance(refs, str):
+            errors.append("correlation rules must be a YAML list")
+            refs = [refs]
+        rewritten = []
+        for ref in refs:
+            safe_name = aliases.get(str(ref))
+            if safe_name is None:
+                errors.append(f"correlation refers to {ref!r}, which is not a rule's name")
+                rewritten.append(str(ref))
+            else:
+                rewritten.append(safe_name)
+        if correlation:
+            correlation["rules"] = rewritten
     normalised = "\n---\n".join(yaml.safe_dump(d, sort_keys=False, allow_unicode=True)
                                 for d in docs)  # fmt: skip
     try:
@@ -221,13 +250,6 @@ def check(text: str, known_fields: set[str]) -> tuple[list, list[str], str | Non
     for r in rules:
         if r.unsupported:
             errors.append(f"rule {r.title!r}: {r.unsupported}")
-    names = {d.get("name") for d in docs if "detection" in d} | {
-        str(d.get("id")) for d in docs if "detection" in d
-    }
-    for d in docs:
-        for ref in (d.get("correlation") or {}).get("rules") or []:
-            if str(ref) not in names:
-                errors.append(f"correlation refers to {ref!r}, which is not a rule's name")
     return rules, errors, normalised
 
 
