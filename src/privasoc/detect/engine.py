@@ -36,7 +36,7 @@ def event_time(ecs: dict, received_at: str) -> str:
 class Engine:
     def __init__(self, rules: list[Rule]):
         self.rules = rules
-        ok = [r for r in rules if r.unsupported is None]
+        ok = [r for r in rules if r.unsupported is None and not r.disabled]
         self.correlations = [r for r in ok if r.correlation]
         self.base = [r for r in ok if not r.correlation]
         by_ref = {}
@@ -64,6 +64,8 @@ class Engine:
         return {
             "rules": len(self.rules),
             "supported": sum(r.unsupported is None for r in self.rules),
+            "disabled": sum(bool(r.disabled) for r in self.rules),
+            "local": sum(r.origin == "ai" for r in self.rules),
             "correlations": len(self.correlations),
         }
 
@@ -183,3 +185,82 @@ def _set_state(store: Store, key: str, value: str) -> None:
             "value=excluded.value",
             (key, value),
         )
+
+
+def backtest(store: Store, rules: list[Rule], hours: float | None = None, limit: int = 20000):
+    """Run rules over stored events without touching alerts (proposals, hunts).
+
+    Base rules report their matching events; correlations report the groups (per sender)
+    whose count reaches the threshold in some window, with the events of the best window."""
+    from datetime import UTC, datetime
+
+    eng = Engine(rules)
+    rows = store.conn.execute(
+        "SELECT id, source, received_at, ecs FROM events ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    since = None
+    if hours:
+        since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+    events = []
+    for eid, source, received_at, raw in reversed(rows):
+        ecs = json.loads(raw)
+        at = event_time(ecs, received_at)
+        if since and at < since:
+            continue
+        events.append((eid, source, at, ecs))
+    matches: dict[str, list[tuple]] = {r.id: [] for r in eng.base}
+    for ev in events:
+        for r in eng.base:
+            try:
+                if r.applies(ev[3]) and r.match(ev[3]):
+                    matches[r.id].append(ev)
+            except Exception:  # noqa: BLE001, S112 - same policy as the live engine
+                continue
+    out = []
+    for r in eng.base:
+        ids = [e[0] for e in matches[r.id]]
+        # a base rule of a correlation raises no alert, but its matches help the reviewer
+        kind = "base" if r.id in eng.silent else "rule"
+        out.append({"id": r.id, "title": r.title, "kind": kind, "matches": len(ids),
+                    "event_ids": ids})  # fmt: skip
+    for c in eng.correlations:
+        out.append({"id": c.id, "title": c.title, "kind": "correlation",
+                    **_correlate_offline(c, matches)})  # fmt: skip
+    unsupported = [{"title": r.title, "reason": r.unsupported} for r in rules if r.unsupported]
+    return {"events": len(events), "results": out, "unsupported": unsupported}
+
+
+def _correlate_offline(c: Rule, matches: dict) -> dict:
+    cor = c.correlation
+    evs = sorted({e[0]: e for rid in cor["base_ids"] for e in matches[rid]}.values(),
+                 key=lambda e: e[2])  # fmt: skip
+    groups: dict[str, list] = {}
+    for e in evs:
+        g = {f: get(e[3], f) for f in cor["group_by"]}
+        if any(v in (None, "", []) for v in g.values()):
+            continue
+        key = json.dumps({"sender": e[1], **g}, sort_keys=True, default=str)
+        groups.setdefault(key, []).append(e)
+    op, ref = cor["op"]
+    fired = []
+    for key, gevs in groups.items():
+        best, best_ids = -1, []
+        start = 0
+        for end in range(len(gevs)):
+            t_end = parse_ts(gevs[end][2])
+            while parse_ts(gevs[start][2]) < t_end - timedelta(seconds=cor["timespan"]):
+                start += 1
+            win = gevs[start : end + 1]
+            if cor["type"] == "value_count":
+                n = len({json.dumps(get(e[3], cor["field"]), default=str) for e in win})
+            else:
+                n = len(win)
+            if n > best:
+                best, best_ids = n, [e[0] for e in win]
+        ok = {"gt": best > ref, "gte": best >= ref, "lt": best < ref, "lte": best <= ref,
+              "eq": best == ref}[op]  # fmt: skip
+        if ok:
+            fired.append({"group": json.loads(key), "value": best, "event_ids": best_ids})
+    fired.sort(key=lambda g: -g["value"])
+    return {"matches": sum(len(g["event_ids"]) for g in fired), "groups": fired,
+            "event_ids": sorted({i for g in fired for i in g["event_ids"]})}  # fmt: skip

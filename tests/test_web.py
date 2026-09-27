@@ -273,3 +273,31 @@ def test_alerts_pages_and_analyst_verdict(tmp_path):
     det = c.get("/ui/detection", params={"show": "all"}).text
     assert "Port scan from one source" in det and "not installed yet" in det
     assert "open alerts" in c.get("/ui/").text
+
+
+def test_hunt_and_ai_rule_pages(tmp_path):
+    from privasoc import service
+    from privasoc.detect import authored
+    from tests.test_detect import ev, ssh_fail
+
+    c, store = make(tmp_path)
+    store.ingest([ev(i, ssh_fail("203.0.113.9", i)) for i in range(3)], auto_approve=True)
+    login(c)
+    assert "Hunt and write rules" in c.get("/ui/hunt").text
+    yaml_text = "title: SSH seen\nlogsource: {product: privasoc}\ndetection:\n  s: {process.name: sshd}\n  condition: s\n"
+    from privasoc.detect.engine import backtest
+    from privasoc.detect.sigma import compile_text
+
+    bt = backtest(store, compile_text(yaml_text, "ai"))
+    authored.save(store, "ai-test", yaml_text, "SSH seen", "request", request="ssh", backtest=bt)
+    page = c.get("/ui/airule", params={"id": "ai-test"}).text
+    assert "3 matching event(s)" in page and "Approve" in page
+    service._ENGINE.clear()
+    r = c.post("/ui/airule/decide", data={"id": "ai-test", "status": "approved", "csrf": csrf(c)})
+    assert "approved" in r.headers["location"]
+    r = c.post(
+        "/ui/detection/toggle",
+        data={"rule_id": "6d7b0a52-3c1e-4a0f-9b1e-2f6a8c1d0007", "off": 1, "csrf": csrf(c)},
+    )
+    assert "disabled" in r.headers["location"]
+    assert "enable" in c.get("/ui/detection").text

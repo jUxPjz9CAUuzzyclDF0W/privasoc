@@ -216,7 +216,10 @@ def _field_matcher(key: str, value: Any, fmap: dict | None, logsource: str):
     name, *mods = key.split("|")
     bad = [m for m in mods if m not in SUPPORTED_MODS]
     if bad:
-        raise Unsupported(f"modifier {'|'.join(bad)} not supported")
+        raise Unsupported(
+            f"modifier {'|'.join(bad)} not supported (use one of contains, startswith, "
+            "endswith, all, re, cidr, exists, gt, gte, lt, lte; |re for lengths or patterns)"
+        )
     if fmap is None:
         path = name
     elif name in fmap:
@@ -383,6 +386,7 @@ class Rule:
     logsource: dict = field(default_factory=dict)
     name: str | None = None  # referenced by correlations
     unsupported: str | None = None
+    disabled: str | None = None  # switched off by the analyst (D54), with the reason
     match: Any = None  # callable(doc) -> bool
     applies: Any = None  # callable(doc) -> bool
     correlation: dict | None = None  # Sigma 2 correlation block, normalised
@@ -396,7 +400,10 @@ class Rule:
         )
 
     def licence(self) -> str:
-        return "DRL 1.1 (SigmaHQ)" if self.origin == "sigmahq" else "MIT (privasoc)"
+        return {
+            "sigmahq": "DRL 1.1 (SigmaHQ)",
+            "privasoc": "MIT (privasoc)",
+        }.get(self.origin, "local rule (written in privasoc, not published)")
 
 
 _SPAN = re.compile(r"^(\d+)([smhd])$")
@@ -435,7 +442,10 @@ def _compile(doc: dict, origin: str, path: str) -> Rule:
             if len(ops) != 1:
                 raise Unsupported("correlation condition needs one of gt/gte/lt/lte/eq")
             if ctype == "value_count" and not cond.get("field"):
-                raise Unsupported("value_count needs condition.field")
+                raise Unsupported(
+                    "value_count needs the counted field inside condition, e.g. "
+                    "condition: {field: destination.port, gte: 15}"
+                )
             gb = c.get("group-by") or []
             r.correlation = {
                 "type": ctype,
@@ -488,3 +498,34 @@ def load_rules(dirs: list[tuple[Path, str]]) -> list[Rule]:
                 if isinstance(d, dict) and ("detection" in d or "correlation" in d):
                     rules.append(_compile(d, origin, str(p.relative_to(base))))
     return rules
+
+
+def compile_text(text: str, origin: str, path: str = "") -> list[Rule]:
+    """Rules from YAML text (one or several documents separated by ---)."""
+    try:
+        docs = [d for d in yaml.safe_load_all(text) if d is not None]
+    except yaml.YAMLError as exc:
+        raise Unsupported(f"YAML: {str(exc)[:300]}") from exc
+    if not docs or not all(isinstance(d, dict) for d in docs):
+        raise Unsupported("expected one or more YAML mappings")
+    return [_compile(d, origin, path) for d in docs if "detection" in d or "correlation" in d]
+
+
+def used_fields(doc: dict) -> set[str]:
+    """ECS fields a rule document reads (detection keys, group-by, value_count field)."""
+    out: set[str] = set()
+    for k, v in (doc.get("detection") or {}).items():
+        if k == "condition":
+            continue
+        for item in v if isinstance(v, list) else [v]:
+            if isinstance(item, dict):
+                for fk in item:
+                    name = fk.split("|")[0]
+                    if name:
+                        out.add(name)
+    c = doc.get("correlation") or {}
+    gb = c.get("group-by") or []
+    out.update([gb] if isinstance(gb, str) else gb)
+    if isinstance(c.get("condition"), dict) and c["condition"].get("field"):
+        out.add(c["condition"]["field"])
+    return out

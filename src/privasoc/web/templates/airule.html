@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, post, host_link, parser_link with context %}
+{% block title %}{{ c.title }} · privasoc{% endblock %}
+{% block content %}
+<h1>{{ c.title }} {{ badge(c.status) }}</h1>
+<p class="muted">{{ c.origin.replace("_", " ") }} · {{ c.model }} · {{ c.created_at[:19] }}{% if alert %} · from <a href="/ui/alert?id={{ alert.id }}">alert #{{ alert.id }}</a>{% endif %}</p>
+{% if c.request %}<div class="panel"><p class="muted">Request</p><p>{{ c.request }}</p></div>{% endif %}
+{% set bt = c.backtest or {} %}{% set fp = bt.false_positive %}
+<div class="panel">
+  <div class="actions">
+    {% if c.status == "hunt" %}{{ post("/ui/airule/decide", "Keep as a rule proposal", {"id": c.id, "status": "proposed"}) }}{% endif %}
+    {% if c.status in ["proposed", "disabled"] %}{{ post("/ui/airule/decide", "Approve", {"id": c.id, "status": "approved"}, "primary") }}{% endif %}
+    {% if c.status == "proposed" %}{{ post("/ui/airule/decide", "Reject", {"id": c.id, "status": "rejected"}, "danger") }}{% endif %}
+    {% if c.status == "approved" %}{{ post("/ui/airule/decide", "Disable", {"id": c.id, "status": "disabled"}, "danger") }}{% endif %}
+  </div>
+  {% if c.replaces %}<p class="muted">Approving it switches off the rule it fixes ({{ c.replaces }}); disabling it switches that rule back on.</p>{% endif %}
+</div>
+{% if fp %}
+<div class="flash {{ 'error' if fp.tp_lost else 'ok' }}">Past alerts of the original rule: {{ fp.fp_removed }} of {{ fp.fp }} false positive(s) would disappear, {{ fp.tp_kept }} of {{ fp.tp }} true positive(s) would still be detected.{% if fp.tp_lost %} It would HIDE true positives: {% for i in fp.tp_lost %}<a href="/ui/alert?id={{ i }}">#{{ i }}</a> {% endfor %}{% endif %}</div>
+{% endif %}
+<h2>Backtest on {{ bt.events }} stored events</h2>
+<div class="panel">
+{% for r in bt.results or [] %}
+  <p><strong>{{ r.title }}</strong> ({{ "base of a correlation, raises no alert itself" if r.kind == "base" else r.kind }}): {{ r.matches }} matching event(s)</p>
+  {% if r.groups %}<table><tr><th>Group</th><th class="num">Value</th></tr>
+  {% for g in r.groups %}<tr><td><code>{{ g.group|tojson }}</code></td><td class="num">{{ g.value }}</td></tr>{% endfor %}</table>{% endif %}
+{% endfor %}
+{% if not (bt.results or [])|rejectattr("kind", "equalto", "base")|sum(attribute="matches") %}<p class="flash error">It matches nothing in the stored events: check the fields and values before keeping it.</p>{% endif %}
+</div>
+<div class="grid2">
+<div><h2>Rule</h2><pre>{{ c.yaml }}</pre></div>
+<div><h2>Sample of matching events</h2>
+<div class="panel">{% if events %}<table>
+{% for e in events %}<tr><td>{{ e.id }}</td><td>{{ host_link(e.source) }}</td>
+<td><details><summary>{{ ((e.ecs.event or {}).original or "")[:120] }}</summary><pre>{{ e.ecs|pretty }}</pre></details></td></tr>{% endfor %}
+</table>{% else %}<p class="muted">None.</p>{% endif %}</div></div>
+</div>
+{% endblock %}

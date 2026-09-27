@@ -1,0 +1,24 @@
+# Step 7 bench (D56), written by hand. `labels`: the answer is every synthetic event with one
+# of these labels. `groups`: the answer is the set of values of `group_field` that a
+# correlation must return. Cases 1-10 are dev, 11-20 holdout (never used to tune prompts).
+cases:
+  - {n: 1, set: dev, request: "Failed SSH logins", labels: [ssh_fail]}
+  - {n: 2, set: dev, request: "Successful SSH logins as root", labels: [bf_success]}
+  - {n: 3, set: dev, request: "Sources with more than 20 failed SSH logins within 5 minutes", groups: ["203.0.113.50"], group_field: source.ip}
+  - {n: 4, set: dev, request: "DNS queries for domains ending in .zip", labels: [zip_tld]}
+  - {n: 5, set: dev, request: "Web requests made with the sqlmap tool", labels: [sqlmap]}
+  - {n: 6, set: dev, request: "Connections dropped by the firewall on port 23", labels: [telnet]}
+  - {n: 7, set: dev, request: "Sources dropped by the firewall on more than 15 different destination ports within 2 minutes", groups: ["198.51.100.99"], group_field: source.ip}
+  - {n: 8, set: dev, request: "SSH attempts for users that do not exist", labels: [invalid_user]}
+  - {n: 9, set: dev, request: "Web requests answered with a 404", labels: [web_404]}
+  - {n: 10, set: dev, request: "DNS names with a label longer than 40 characters", labels: [long_label]}
+  - {n: 11, set: holdout, request: "Successful SSH logins from outside 10.0.0.0/8", labels: [bf_success]}
+  - {n: 12, set: holdout, request: "Inbound RDP connections the firewall allowed", labels: [rdp_inbound]}
+  - {n: 13, set: holdout, request: "POST requests to wp-login.php", labels: [wp_login]}
+  - {n: 14, set: holdout, request: "Clients that requested more than 30 missing pages in 5 minutes", groups: ["192.0.2.10"], group_field: source.ip}
+  - {n: 15, set: holdout, request: "DNS lookups of pastebin", labels: [pastebin]}
+  - {n: 16, set: holdout, request: "Requests for the /admin pages", labels: [admin_access]}
+  - {n: 17, set: holdout, request: "Failed SSH logins for the user admin", labels: [invalid_user]}
+  - {n: 18, set: holdout, request: "Everything the firewall dropped from 198.51.100.99", labels: [scan]}
+  - {n: 19, set: holdout, request: "Sources with at least 10 WordPress login attempts in 10 minutes", groups: ["198.51.100.30"], group_field: source.ip}
+  - {n: 20, set: holdout, request: "Blocked connections to port 22 or 3389", labels: [blocked_ssh_rdp]}

@@ -485,7 +485,9 @@ def create_router(settings: Settings, store: Store, lock: threading.RLock) -> AP
     @router.get("/detection", dependencies=auth)
     def detection_page(request: Request, show: str = "") -> HTMLResponse:
         eng = service.engine(settings)
-        rules = eng.rules if show == "all" else [r for r in eng.rules if r.unsupported]
+        rules = (
+            eng.rules if show == "all" else [r for r in eng.rules if r.unsupported or r.disabled]
+        )
         fetched = (settings.sigma_dir / "SOURCE").exists()
         return page(
             request,
@@ -516,6 +518,101 @@ def create_router(settings: Settings, store: Store, lock: threading.RLock) -> AP
         return back(
             "/ui/detection", f"SigmaHQ {r['tag']}: {r['supported']}/{r['rules']} rules supported"
         )
+
+    # ------------------------------------------------------------------ AI rules, hunting (step 7)
+
+    def author_job(origin: str, request: str, ref, provider: str, hours, target: str) -> Response:
+        def work(say):
+            job_store = Store(store.path)
+            try:
+                out = service.author_rule(job_store, settings, origin, request, ref, provider,
+                                          say, hours)  # fmt: skip
+                return {k: out.get(k) for k in ("status", "id", "title", "reason")}
+            finally:
+                job_store.close()
+
+        try:
+            job = jobs.start("author", target, work)
+        except RuntimeError as exc:
+            return back("/ui/hunt", str(exc), "error")
+        return RedirectResponse(f"/ui/job?id={job.id}", status_code=303)
+
+    @router.get("/hunt", dependencies=auth)
+    def hunt_page(request: Request) -> HTMLResponse:
+        from privasoc.detect import authored
+
+        with lock:
+            rules = authored.listing(store)
+        return page(request, "hunt.html", rules=rules, remote=bool(settings.llm_remote_url))
+
+    @router.post("/hunt", dependencies=post)
+    def hunt_start(
+        question: Annotated[str, Form()],
+        mode: Annotated[str, Form()] = "hunt",
+        hours: Annotated[float, Form()] = 24,
+        provider: Annotated[str, Form()] = "local",
+    ) -> Response:
+        if mode not in {"hunt", "request"} or not question.strip():
+            return back("/ui/hunt", "write a question or a rule request", "error")
+        return author_job(mode, question[:2000], None, provider,
+                          (hours or None) if mode == "hunt" else None, "hunt")  # fmt: skip
+
+    @router.post("/alert/author", dependencies=post)
+    def alert_author(
+        id: Annotated[int, Form()],  # noqa: A002
+        origin: Annotated[str, Form()],
+        provider: Annotated[str, Form()] = "local",
+    ) -> Response:
+        if origin not in {"event", "false_positive"}:
+            return back(alert_url(id), "unknown request", "error")
+        return author_job(origin, "", id, provider, None, str(id))
+
+    @router.get("/airule", dependencies=auth)
+    def airule_page(request: Request, id: str) -> HTMLResponse:  # noqa: A002
+        from privasoc.detect import alerts as al
+        from privasoc.detect import authored
+
+        with lock:
+            c = authored.get(store, id)
+            if not c:
+                raise HTTPException(status_code=404, detail="unknown rule")
+            ids = []
+            for r in (c["backtest"] or {}).get("results", []):
+                ids += r["event_ids"][:20]
+            events = []
+            for eid in sorted(set(ids))[:40]:
+                row = store.conn.execute(
+                    "SELECT id, source, received_at, ecs FROM events WHERE id=?", (eid,)
+                ).fetchone()
+                if row:
+                    events.append({"id": row[0], "source": row[1], "received_at": row[2],
+                                   "ecs": json.loads(row[3])})  # fmt: skip
+            alert = al.alert(store, int(c["ref"])) if (c["ref"] or "").isdigit() else None
+        return page(request, "airule.html", c=c, events=events, alert=alert)
+
+    @router.post("/airule/decide", dependencies=post)
+    def airule_decide(id: Annotated[str, Form()], status: Annotated[str, Form()]) -> Response:  # noqa: A002
+        url = "/ui/airule?" + urlencode({"id": id})
+        try:
+            with lock:
+                c = service.decide_rule(store, settings, id, status)
+        except service.ActionError as exc:
+            return back(url, str(exc), "error")
+        msg = {"approved": "approved: detection uses it from the next events on",
+               "proposed": "kept as a rule proposal", "rejected": "rejected",
+               "disabled": "disabled"}[c["status"]]  # fmt: skip
+        return back(url, msg)
+
+    @router.post("/detection/toggle", dependencies=post)
+    def detection_toggle(
+        rule_id: Annotated[str, Form()], off: Annotated[int, Form()] = 1
+    ) -> Response:
+        try:
+            with lock:
+                service.toggle_rule(store, settings, rule_id, bool(off))
+        except service.ActionError as exc:
+            return back("/ui/detection?show=all", str(exc), "error")
+        return back("/ui/detection?show=all", f"rule {'disabled' if off else 'enabled'}")
 
     # ------------------------------------------------------------------ data
 

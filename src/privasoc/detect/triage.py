@@ -52,21 +52,19 @@ def build_evidence(alert: dict, rule, events: list[dict], pz) -> tuple[str, set[
     from privasoc.pseudo import Pseudonymizer
 
     events = events[:MAX_EVENTS]
-    texts = [
-        f"event {e['id']} (received {e['received_at'][:19]}): "
-        + json.dumps(_compact(e["ecs"]), separators=(",", ":"), ensure_ascii=False)
-        for e in events
-    ]
     # The sender's name is chosen by privasoc (`syslog:<ip>`, a file name...), not detected:
-    # it gets a host pseudonym of its own.
+    # it gets a host pseudonym of its own. Events are pseudonymised field by field (D53).
     sender = pz.vault.token_for("host", alert["source"])
-    header = f"sender: {sender}"
-    results = [pz.pseudonymize(t) for t in [header, *texts]]
     mapping, originals = {alert["source"]: sender}, {alert["source"]}
-    for r in results:
+    docs = [pz.pseudonymize_doc(_compact(e["ecs"])) for e in events]
+    for r in docs:
         mapping.update(r.mapping)
         originals |= r.originals
-    lines = [Pseudonymizer.propagate(r.text, mapping) for r in results]
+    lines = [f"sender: {sender}"] + [
+        f"event {e['id']} (received {e['received_at'][:19]}): "
+        + Pseudonymizer.propagate(r.text, mapping)
+        for e, r in zip(events, docs, strict=True)
+    ]
     rule_part = [
         f"alert: {alert['title']} (level {alert['level']}, {alert['count']} occurrence(s), "
         f"first {alert['first_seen'][:19]}, last {alert['last_seen'][:19]})",

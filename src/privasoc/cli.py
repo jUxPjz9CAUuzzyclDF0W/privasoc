@@ -323,7 +323,10 @@ def sigma_list(
     for r in service.engine(get_settings()).rules:
         if unsupported and r.unsupported is None:
             continue
+        typer.echo(f"{r.id[:36]:36} ", nl=False)
         state = "ok" if r.unsupported is None else f"unsupported: {r.unsupported}"
+        if r.disabled:
+            state = f"disabled: {r.disabled}"
         typer.echo(f"{r.level:13} {r.origin:8} {r.title[:60]:60} {state}")
 
 
@@ -405,6 +408,132 @@ def alerts_close(
 def alerts_ack(alert_id: int) -> None:
     _do(service.set_alert_status, Store(get_settings().db_path), alert_id, "acknowledged")
     typer.echo(f"#{alert_id} acknowledged")
+
+
+airules_app = typer.Typer(
+    help="Rules written by the model (step 7): proposals you approve.", no_args_is_help=True
+)
+app.add_typer(airules_app, name="ai-rules")
+
+
+def _show_backtest(bt: dict) -> None:
+    typer.echo(f"backtest on {bt['events']} stored events:")
+    for r in bt["results"]:
+        note = " (base of a correlation, raises no alert itself)" if r["kind"] == "base" else ""
+        typer.echo(f"  {r['title']}: {r['matches']} matching event(s){note}")
+        for g in r.get("groups", [])[:10]:
+            typer.echo(f"    {g['group']} -> {g['value']}")
+    if not any(r["matches"] for r in bt["results"] if r["kind"] != "base"):
+        typer.echo("  (matches nothing: check the rule before keeping it)")
+    fp = bt.get("false_positive")
+    if fp:
+        typer.echo(
+            f"  past alerts: {fp['fp_removed']}/{fp['fp']} false positives removed, "
+            f"{fp['tp_kept']}/{fp['tp']} true positives still detected"
+            + (f"; WOULD HIDE true positives {fp['tp_lost']}" if fp["tp_lost"] else "")
+        )
+
+
+def _author(origin: str, request: str = "", ref: int | None = None, provider: str = "local",
+            hours: float | None = None) -> None:  # fmt: skip
+    s = get_settings()
+    out = _do(service.author_rule, Store(s.db_path), s, origin, request, ref, provider,
+              progress=lambda m: typer.echo(f"  {m}"), hours=hours)  # fmt: skip
+    if out["status"] != "proposed":
+        typer.echo(f"no valid rule after {len(out['attempts'])} attempts: {out['reason']}")
+        raise typer.Exit(code=1)
+    typer.echo(out["yaml"])
+    _show_backtest(out["backtest"])
+    typer.echo(f"{out['id']} ({'hunt, not a rule yet' if origin == 'hunt' else 'proposed'})")
+
+
+@app.command()
+def hunt(
+    question: str,
+    hours: Annotated[float, typer.Option(help="Look back this many hours (0 = all)")] = 24,
+    provider: str = "local",
+) -> None:
+    """Ask a question about your events; the model answers with a Sigma rule that is run."""
+    _author("hunt", question, provider=provider, hours=hours or None)
+
+
+@airules_app.command("write")
+def airules_write(request: str, provider: str = "local") -> None:
+    """Describe what to detect; the model writes the rule, privasoc backtests it."""
+    _author("request", request, provider=provider)
+
+
+@airules_app.command("from-alert")
+def airules_from_alert(
+    alert_id: int,
+    false_positive: Annotated[bool, typer.Option("--false-positive")] = False,
+    provider: str = "local",
+) -> None:
+    """A rule that catches these events, or (--false-positive) a fix of the alert's rule."""
+    _author("false_positive" if false_positive else "event", ref=alert_id, provider=provider)
+
+
+@airules_app.command("list")
+def airules_list(status: str | None = None) -> None:
+    from privasoc.detect import authored
+
+    for c in authored.listing(Store(get_settings().db_path), status):
+        typer.echo(f"{c['id']}  {c['status']:9} {c['origin']:15} {c['title'][:60]}")
+
+
+@airules_app.command("show")
+def airules_show(rule_id: str) -> None:
+    from privasoc.detect import authored
+
+    c = authored.get(Store(get_settings().db_path), rule_id)
+    if not c:
+        raise typer.BadParameter("unknown rule")
+    typer.echo(f"# {c['id']} {c['status']} ({c['origin']}, {c['model']}): {c['request']}")
+    typer.echo(c["yaml"])
+    if c["backtest"]:
+        _show_backtest(c["backtest"])
+
+
+def _decide(rule_id: str, status: str) -> None:
+    s = get_settings()
+    c = _do(service.decide_rule, Store(s.db_path), s, rule_id, status)
+    typer.echo(f"{c['id']} {c['status']}")
+
+
+@airules_app.command("approve")
+def airules_approve(rule_id: str) -> None:
+    _decide(rule_id, "approved")
+
+
+@airules_app.command("keep")
+def airules_keep(rule_id: str) -> None:
+    """Turn a hunt into a rule proposal."""
+    _decide(rule_id, "proposed")
+
+
+@airules_app.command("reject")
+def airules_reject(rule_id: str) -> None:
+    _decide(rule_id, "rejected")
+
+
+@airules_app.command("disable")
+def airules_disable(rule_id: str) -> None:
+    _decide(rule_id, "disabled")
+
+
+@sigma_app.command("disable")
+def sigma_disable(rule_id: str, reason: str = "") -> None:
+    """Switch a rule off (a correlation takes its base rules with it)."""
+    s = get_settings()
+    _do(service.toggle_rule, Store(s.db_path), s, rule_id, True, reason)
+    typer.echo(f"{rule_id} disabled")
+
+
+@sigma_app.command("enable")
+def sigma_enable(rule_id: str) -> None:
+    s = get_settings()
+    _do(service.toggle_rule, Store(s.db_path), s, rule_id, False)
+    typer.echo(f"{rule_id} enabled")
 
 
 parsers_app = typer.Typer(help="Review AI-generated parsers (D23).", no_args_is_help=True)
@@ -614,6 +743,57 @@ def eval_learn(
         )
     rows = [json.loads(x) for x in results.read_text(encoding="utf-8").splitlines()]
     typer.echo(json.dumps(evaluation.learning_summary(rows), indent=2))
+
+
+@eval_app.command("hunt")
+def eval_hunt(
+    fixture_set: Annotated[str, typer.Option("--set", help="dev, holdout or all")] = "dev",
+    results: Path = Path("evaluation/results-hunt.jsonl"),
+    budget: Annotated[float, typer.Option(help="Stop after this many seconds")] = 0,
+    runs: Annotated[int, typer.Option(help="Runs per case")] = 1,
+) -> None:
+    """Step 7 bench (D56): hand-written hunts on synthetic events with a known answer.
+    Resumable: (case, model, run) already in the results file are skipped."""
+    import json
+    import time
+
+    from privasoc import bench_hunt
+    from privasoc.llm import LLMClient
+    from privasoc.pseudo import Pseudonymizer, Vault
+
+    s = get_settings()
+    llm = LLMClient(service._endpoint(s, "local"), timeout=s.llm_timeout,
+                    max_tokens=s.llm_max_tokens, num_ctx=s.llm_num_ctx)  # fmt: skip
+    _do(llm.check)
+    rows = []
+    if results.exists():
+        rows = [json.loads(x) for x in results.read_text(encoding="utf-8").splitlines()]
+    done = {(r["n"], r["model"], r.get("run", 1)) for r in rows}
+
+    def fresh_pz():
+        return Pseudonymizer(Vault(":memory:", secrets.token_bytes(32), Fernet.generate_key()))
+
+    t0 = time.monotonic()
+    results.parent.mkdir(parents=True, exist_ok=True)
+    for run in range(1, runs + 1):
+        for case in bench_hunt.load_cases():
+            if fixture_set != "all" and case["set"] != fixture_set:
+                continue
+            if (case["n"], llm.endpoint.model, run) in done:
+                continue
+            if budget and time.monotonic() - t0 > budget:
+                typer.echo("budget reached; run again to continue")
+                return
+            row = {**bench_hunt.run_case(case, llm, fresh_pz), "run": run}
+            with results.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+            rows.append(row)
+            typer.echo(
+                f"#{case['n']:<3} {'valid' if row['valid'] else 'INVALID':8} "
+                f"P={row['precision']:.2f} R={row['recall']:.2f} exact={row['exact']} "
+                f"attempts={row['attempts']} {row['llm_s']}s  {case['request']}"
+            )
+    typer.echo(json.dumps(bench_hunt.summary(rows), indent=2))
 
 
 @eval_app.command("run")

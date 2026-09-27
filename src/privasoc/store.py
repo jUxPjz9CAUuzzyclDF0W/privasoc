@@ -96,6 +96,21 @@ CREATE TABLE IF NOT EXISTS alert_events (
     PRIMARY KEY (alert_id, event_id)
 );
 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS custom_rules (   -- step 7: rules written by the model or by hand
+    id          TEXT PRIMARY KEY,
+    yaml        TEXT NOT NULL,              -- real values (re-identified), local only
+    title       TEXT NOT NULL,
+    status      TEXT NOT NULL,              -- proposed | approved | rejected | disabled
+    origin      TEXT NOT NULL,              -- request | false_positive | event | hunt | human
+    ref         TEXT,                       -- alert or rule it comes from
+    request     TEXT,
+    model       TEXT,
+    replaces    TEXT,                       -- rule id disabled when this one is approved
+    backtest    TEXT,                       -- JSON summary
+    created_at  TEXT NOT NULL,
+    decided_at  TEXT
+);
+CREATE TABLE IF NOT EXISTS disabled_rules (rule_id TEXT PRIMARY KEY, reason TEXT, at TEXT);
 CREATE TABLE IF NOT EXISTS llm_calls (
     id          INTEGER PRIMARY KEY,
     at          TEXT NOT NULL,

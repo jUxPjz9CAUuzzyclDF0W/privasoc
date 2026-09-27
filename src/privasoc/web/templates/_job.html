@@ -23,6 +23,12 @@
     <p>AI verdict: {{ badge(job.result.verdict or "error") }} · {{ job.result.problems }} problem(s) flagged</p>
     <p><a href="/ui/alert?id={{ job.result.alert }}">Back to alert #{{ job.result.alert }}</a></p>
   </div>
+  {% elif job.result and job.kind == "author" %}
+  <div class="panel">
+    {% if job.result.status == "proposed" %}
+    <p>{{ badge("proposed") }} <a href="/ui/airule?id={{ job.result.id }}">{{ job.result.title }}</a>: see what it matches, then decide.</p>
+    {% else %}<p>{{ badge("failed") }} no valid rule: {{ job.result.reason }}</p>{% endif %}
+  </div>
   {% endif %}
   {% if job.error %}<div class="flash error">{{ job.error }}</div>{% endif %}
   <div class="panel"><pre>{% for l in job.log %}{{ l }}

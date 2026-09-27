@@ -70,3 +70,6 @@ details summary { cursor: pointer; color: var(--accent); }
 .new { color: var(--accent); }
 .closed_fp, .benign, .false_positive { color: var(--ok); }
 .flagged { color: var(--crit); font-size: .85rem; }
+textarea { font: inherit; width: 100%; padding: 8px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--text); }
+.hunt, .disabled { color: var(--muted); }

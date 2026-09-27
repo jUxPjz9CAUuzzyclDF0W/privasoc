@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge %}
+{% block title %}Hunt · privasoc{% endblock %}
+{% block content %}
+<h1>Hunt and write rules</h1>
+<div class="panel">
+  <form method="post" action="/ui/hunt">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <p><textarea name="question" rows="3" required placeholder="e.g. Which sources failed SSH more than 20 times within 5 minutes?"></textarea></p>
+    <div class="actions">
+      <label><input type="radio" name="mode" value="hunt" checked> ask a question about past events, over the last
+        <select name="hours"><option value="1">hour</option><option value="24" selected>24 hours</option><option value="168">7 days</option><option value="0">all events</option></select></label>
+      <label><input type="radio" name="mode" value="request"> write a detection rule</label>
+      <select name="provider"><option value="local">local model</option>{% if remote %}<option value="remote">remote API (pseudonymised)</option>{% endif %}</select>
+      <button class="primary">Go</button>
+    </div>
+  </form>
+  <p class="muted">The model answers with a Sigma rule (never SQL), written on pseudonymised examples; privasoc checks it and runs it with the detection engine. A hunt can then be kept as a rule proposal; a rule only runs once you approve it.</p>
+</div>
+<h2>Rules and hunts written here</h2>
+<div class="panel">
+{% if rules %}<table>
+<tr><th>Rule</th><th>Status</th><th>From</th><th class="num">Matches</th><th>Created</th></tr>
+{% for c in rules %}{% set bt = c.backtest or {} %}
+<tr><td><a href="/ui/airule?id={{ c.id }}">{{ c.title }}</a><div class="muted">{{ (c.request or "")[:120] }}</div></td>
+<td>{{ badge(c.status) }}</td><td>{{ c.origin.replace("_", " ") }}</td>
+<td class="num">{{ (bt.results or [])|rejectattr("kind", "equalto", "base")|sum(attribute="matches") }}</td><td>{{ c.created_at[:19] }}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="muted">Nothing yet.</p>{% endif %}
+</div>
+{% endblock %}

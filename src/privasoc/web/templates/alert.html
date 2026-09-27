@@ -49,6 +49,15 @@
   {% endif %}
 </div>
 
+<h2>Rules from this alert</h2>
+<div class="panel">
+  <div class="actions">
+    {% if events %}{{ post("/ui/alert/author", "Write a rule that catches these events", {"id": a.id, "origin": "event"}) }}{% endif %}
+    {% if a.status == "closed_fp" and rule %}{{ post("/ui/alert/author", "Fix the rule so this false positive stops", {"id": a.id, "origin": "false_positive"}, "primary") }}{% endif %}
+  </div>
+  <p class="muted">The local model writes a proposal on pseudonymised events; you see what it would have matched (and, for a fix, which past alerts it would remove or keep) before approving it.{% if a.status != "closed_fp" %} Close the alert as a false positive to ask for a fix of its rule.{% endif %}</p>
+</div>
+
 <h2>Events ({{ events|length }}{% if a.count > events|length %} of {{ a.count }}{% endif %})</h2>
 <div class="panel">
 {% if events %}<table>

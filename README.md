@@ -200,6 +200,33 @@ uv run privasoc detect             # one detection pass (serve runs it every min
 uv run privasoc alerts list ; uv run privasoc alerts triage <id> ; uv run privasoc alerts close <id> tp
 ```
 
+## AI-written rules and hunting
+
+Ask a question about past events or describe what to detect; the local model answers with a
+Sigma rule (never SQL), written on pseudonymised examples, which privasoc checks with the
+same engine, re-identifies and **backtests** on the stored events. An alert closed as a
+false positive can be turned into a fix of its rule, shown with the past alerts it would
+remove and, above all, any true positive it would hide. Nothing runs until you approve it.
+
+On a hand-written bench (synthetic events with a known answer, `qwen3:8b`, 3 runs per
+request):
+
+| | valid rule | exact answer | precision | recall |
+|---|---|---|---|---|
+| dev (10 requests, used to improve prompts) | 97 % | 83 % | 0.85 | 0.90 |
+| holdout (10 requests, never tuned on) | 97 % | 47 % | 0.57 | 0.52 |
+
+The gap is the honest part: on unseen requests the model often writes exact values where a
+prefix was needed, or adds conditions nobody asked for. The backtest is what makes this
+safe to use: a rule that matches nothing, or too much, is visible before approval.
+
+```bash
+uv run privasoc hunt "Which sources failed SSH more than 20 times within 5 minutes?"
+uv run privasoc ai-rules write "DNS queries for domains ending in .zip"
+uv run privasoc ai-rules from-alert <id> --false-positive
+uv run privasoc eval hunt --set all --runs 3
+```
+
 ## Privacy model
 
 | Guarantee | How |
@@ -222,7 +249,7 @@ on free text; step 5 adds a local-LLM pass and the evaluation publishes both rat
 4. **Web review UI**: hosts, health, parser review, quarantine, events. ✅
 5. **Local-LLM pseudonymisation that learns** (human-approved rules, UI page). ✅
 6. **Sigma detection + alerts + structured AI triage**. ✅
-7. AI-written Sigma rules, natural-language hunting.
+7. **AI-written Sigma rules, natural-language hunting**, with a bench. ✅
 8. Triage evaluation; Windows and Proxmox collection.
 
 ## Development

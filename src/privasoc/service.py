@@ -424,11 +424,32 @@ _ENGINE: dict = {}
 
 
 def engine(s: Settings, reload: bool = False):
-    from privasoc.detect.engine import Engine
+    """Every rule: privasoc's, SigmaHQ's, and the approved local ones (step 7), minus the
+    rules the analyst switched off."""
+    from privasoc.detect import authored
+    from privasoc.detect.engine import Engine, rule_dirs
+    from privasoc.detect.sigma import Unsupported, compile_text, load_rules
 
     key = str(s.sigma_dir)
     if reload or key not in _ENGINE:
-        _ENGINE[key] = Engine.from_dirs(s.sigma_dir)
+        rules = load_rules(rule_dirs(s.sigma_dir))
+        store = Store(s.db_path)
+        try:
+            for c in authored.listing(store, "approved"):
+                try:
+                    rules += compile_text(c["yaml"], "ai", f"local:{c['id']}")
+                except Unsupported as exc:
+                    from privasoc.detect.sigma import Rule
+
+                    rules.append(Rule(c["id"], c["title"], "low", "ai", f"local:{c['id']}",
+                                      unsupported=str(exc)))  # fmt: skip
+            off = authored.disabled(store)
+        finally:
+            store.close()
+        for r in rules:
+            if r.id in off:
+                r.disabled = off[r.id]
+        _ENGINE[key] = Engine(rules)
     return _ENGINE[key]
 
 
@@ -581,3 +602,211 @@ def reidentify_obj(s: Settings, obj):
         return walk(obj)
     finally:
         pz.vault.close()
+
+
+# ---------------------------------------------------------------------- AI rules and hunting
+# (step 7, D54, D55)
+
+
+def _rule_source_text(s: Settings, store: Store, rule) -> str:
+    """The YAML a rule was loaded from (the whole file: a correlation and its base rule)."""
+    from privasoc.detect import authored
+    from privasoc.detect.engine import BUILTIN_RULES
+
+    if rule.origin == "ai":
+        c = authored.get(store, rule.path.removeprefix("local:"))
+        return c["yaml"] if c else ""
+    base = BUILTIN_RULES if rule.origin == "privasoc" else s.sigma_dir / "rules"
+    p = base / rule.path
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def _same_file(s: Settings, rule) -> list[str]:
+    return [r.id for r in engine(s).rules if r.path == rule.path and r.origin == rule.origin]
+
+
+def _context_events(store: Store, limit: int = 2000) -> tuple[list[dict], list[dict]]:
+    """(recent ECS documents for the field catalogue, a few examples, one per source)."""
+    import json as _json
+
+    rows = store.conn.execute(
+        "SELECT id, source, ecs FROM events ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    docs, examples, seen = [], [], set()
+    for eid, source, raw in rows:
+        d = _json.loads(raw)
+        docs.append(d)
+        if source not in seen and len(examples) < 6:
+            seen.add(source)
+            examples.append({"id": eid, "ecs": d})
+    return docs, examples
+
+
+def _summary(bt: dict, keep: int = 50) -> dict:
+    out = {"events": bt["events"], "unsupported": bt["unsupported"], "results": []}
+    for r in bt["results"]:
+        x = {k: r[k] for k in ("id", "title", "kind", "matches")}
+        x["event_ids"] = r["event_ids"][:keep]
+        if "groups" in r:
+            x["groups"] = [{**g, "event_ids": g["event_ids"][:10]} for g in r["groups"][:20]]
+        out["results"].append(x)
+    return out
+
+
+def _fp_effect(store: Store, rule_id: str, rules) -> dict:
+    """Would the derived rule still match the events of past alerts of the original one?"""
+    from privasoc.detect import alerts as al
+
+    base = [r for r in rules if r.unsupported is None and not r.correlation]
+    out = {"fp": 0, "fp_removed": 0, "tp": 0, "tp_kept": 0, "tp_lost": []}
+    for a in al.alerts(store, "all", limit=1000):
+        if a["rule_id"] != rule_id or a["status"] not in ("closed_fp", "closed_tp"):
+            continue
+        evs = al.alert_events(store, a["id"], 200)
+        hit = any(r.applies(e["ecs"]) and r.match(e["ecs"]) for r in base for e in evs)
+        if a["status"] == "closed_fp":
+            out["fp"] += 1
+            out["fp_removed"] += not hit
+        else:
+            out["tp"] += 1
+            if hit:
+                out["tp_kept"] += 1
+            else:
+                out["tp_lost"].append(a["id"])
+    return out
+
+
+def author_rule(
+    store: Store,
+    s: Settings,
+    origin: str,
+    request: str = "",
+    ref: int | None = None,
+    provider: str = "local",
+    progress: Callable[[str], None] | None = None,
+    hours: float | None = None,
+) -> dict:
+    """The model writes a rule (origin: request | false_positive | event | hunt)."""
+    import httpx
+
+    from privasoc.detect import alerts as al
+    from privasoc.detect import author, authored
+    from privasoc.detect.engine import backtest
+    from privasoc.detect.sigma import compile_text
+    from privasoc.llm import LeakError, LLMClient
+
+    say = progress or (lambda _m: None)
+    if origin not in {"request", "false_positive", "event", "hunt"}:
+        raise ActionError("unknown origin")
+    docs, examples = _context_events(store)
+    if not docs:
+        raise ActionError("no normalised event yet: rules are written against real fields")
+    extra, replaces, original = "", None, None
+    if origin in {"false_positive", "event"}:
+        a = al.alert(store, int(ref or 0))
+        if not a:
+            raise ActionError(f"unknown alert {ref}")
+        evs = al.alert_events(store, a["id"], 5)
+        if not evs:
+            raise ActionError("this alert has no event to learn from")
+        examples = [{"id": e["id"], "ecs": e["ecs"]} for e in evs]
+        if origin == "false_positive":
+            original = find_rule(s, a["rule_id"])
+            if not original:
+                raise ActionError("the rule of this alert is not loaded any more")
+            text = _rule_source_text(s, store, original)
+            request = request or (
+                "The example events were closed by the analyst as a FALSE POSITIVE of the rule "
+                "below. Return the whole rule (every document) with a new filter selection that "
+                "excludes events like these, as narrowly as possible so real attacks still match "
+                "(add `and not filter_...` to the condition). Keep everything else."
+            )
+            extra = "Current rule:\n" + text
+            replaces = ",".join(_same_file(s, original))
+        else:
+            request = request or (
+                "Write a rule that detects events like the example events, generalising beyond "
+                "their exact values when that still describes the same activity."
+            )
+    elif not request.strip():
+        raise ActionError("describe what the rule should find")
+    if origin == "hunt":
+        request = ("Write a rule that answers this question when run over past events: "
+                   + request)  # fmt: skip
+    if provider == "remote" and not s.llm_remote_url:
+        raise ActionError("no remote API configured (PRIVASOC_LLM_REMOTE_URL)")
+    pz = pseudonymizer(s)
+    try:
+        if provider == "remote" and s.remote_residual_pass:
+            raw = [str((e["ecs"].get("event") or {}).get("original") or "") for e in examples]
+            pz = pz.with_rules(_local_residual_rules(store, s, [request, *filter(None, raw)], say))
+        llm = LLMClient(_endpoint(s, provider), call_log=store.log_llm_call,
+                        timeout=s.llm_timeout, max_tokens=s.llm_max_tokens,
+                        num_ctx=s.llm_num_ctx)  # fmt: skip
+        try:
+            llm.check()
+        except RuntimeError as exc:
+            raise ActionError(str(exc)) from exc
+        try:
+            draft = author.write(llm, pz, request, author.catalogue(docs), examples,
+                                 extra=extra, progress=say)  # fmt: skip
+        except LeakError as exc:
+            raise ActionError(f"refused by the leak guard: {exc}") from exc
+        except httpx.HTTPError as exc:
+            raise ActionError(f"LLM error: {exc}") from exc
+    finally:
+        pz.vault.close()
+    out = {"status": draft.status, "attempts": draft.attempts, "reason": draft.reason,
+           "model": f"{llm.endpoint.name}:{llm.endpoint.model}"}  # fmt: skip
+    if draft.status != "proposed":
+        return out
+    rules = compile_text(draft.yaml, "ai")
+    say("backtest on the stored events")
+    bt = _summary(backtest(store, rules, hours=hours))
+    if original is not None:
+        bt["false_positive"] = _fp_effect(store, original.id, rules)
+    import hashlib
+
+    rid = "ai-" + hashlib.sha256(draft.yaml.encode()).hexdigest()[:8]
+    authored.save(store, rid, draft.yaml, draft.title, origin, ref=str(ref) if ref else None,
+                  request=request, model=out["model"], replaces=replaces, backtest=bt)  # fmt: skip
+    if origin == "hunt":
+        authored.set_status(store, rid, "hunt")  # a hunt is not a rule proposal until kept
+    return {**out, "id": rid, "yaml": draft.yaml, "title": draft.title, "backtest": bt}
+
+
+def decide_rule(store: Store, s: Settings, rid: str, status: str) -> dict:
+    """approved | rejected | disabled | proposed (keep a hunt as a proposal)."""
+    from privasoc.detect import authored
+
+    c = authored.get(store, rid)
+    if not c:
+        raise ActionError(f"unknown rule {rid}")
+    if status not in {"approved", "rejected", "disabled", "proposed"}:
+        raise ActionError("status must be approved, rejected, disabled or proposed")
+    if status == "approved" and c["status"] not in {"proposed", "disabled"}:
+        raise ActionError(f"only a proposed rule can be approved (is {c['status']})")
+    authored.set_status(store, rid, status)
+    if c["replaces"]:
+        for old in c["replaces"].split(","):
+            if status == "approved":
+                authored.disable(store, old, f"replaced by {rid} (false positive fix)")
+            elif status in {"disabled", "rejected"}:
+                authored.enable(store, old)
+    engine(s, reload=True)
+    return authored.get(store, rid)
+
+
+def toggle_rule(store: Store, s: Settings, rule_id: str, off: bool, reason: str = "") -> None:
+    """Switch any rule (SigmaHQ, privasoc) off or on; a correlation takes its base rules."""
+    from privasoc.detect import authored
+
+    r = find_rule(s, rule_id)
+    if not r:
+        raise ActionError(f"unknown rule {rule_id}")
+    for rid in _same_file(s, r):
+        if off:
+            authored.disable(store, rid, reason or "switched off by the analyst")
+        else:
+            authored.enable(store, rid)
+    engine(s, reload=True)

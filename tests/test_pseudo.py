@@ -161,3 +161,22 @@ def test_key_fingerprint_is_not_an_ipv6(pz):
     line = f"Accepted publickey for bob from 10.0.0.1 port 22 ssh2: RSA {fp}"
     assert fp in pz.pseudonymize(line).text
     assert "2001:db8" in pz.pseudonymize("from 2a02:8070:1:2::5 port 22").text
+
+
+def test_ecs_fields_are_pseudonymised_by_meaning(pz):
+    doc = {"user": {"name": "bob"}, "host": {"hostname": "nas-cave"},
+           "event": {"original": "login ok for bob on nas-cave"}, "source": {"ip": "192.168.1.9"},
+           "process": {"name": "sshd"}}  # fmt: skip
+    r = pz.pseudonymize_doc(doc)
+    assert "bob" not in r.text and "nas-cave" not in r.text and "192.168.1.9" not in r.text
+    assert "sshd" in r.text and {"bob", "nas-cave"} <= r.originals
+    assert pz.field_value("user.name", "bob").text.startswith("user-")
+    assert pz.field_value("process.name", "sshd").text == "sshd"
+
+
+def test_a_document_is_never_pseudonymised_twice(pz):
+    doc = {"event": {"original": "DROP from 198.51.100.99"}, "source": {"ip": "198.51.100.99"}}
+    r = pz.pseudonymize_doc(doc)
+    token = pz.pseudonymize("198.51.100.99").text
+    assert r.text.count(token) == 2
+    assert pz.reidentify(r.text).count("198.51.100.99") == 2

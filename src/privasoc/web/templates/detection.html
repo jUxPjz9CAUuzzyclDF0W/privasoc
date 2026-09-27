@@ -13,14 +13,15 @@
   committed. {% if fetched %}They are installed.{% else %}<strong>They are not installed yet.</strong>{% endif %}</p>
   <form method="post" action="/ui/detection/fetch"><input type="hidden" name="csrf" value="{{ csrf }}"><button>{% if fetched %}Download again{% else %}Download SigmaHQ rules{% endif %}</button></form>
 </div>
-<p class="actions"><a href="/ui/detection" {% if show != "all" %}class="badge"{% endif %}>unsupported</a> <a href="/ui/detection?show=all" {% if show == "all" %}class="badge"{% endif %}>all</a></p>
+<p class="actions"><a href="/ui/detection" {% if show != "all" %}class="badge"{% endif %}>unsupported or disabled</a> <a href="/ui/detection?show=all" {% if show == "all" %}class="badge"{% endif %}>all</a></p>
 <div class="panel">
 {% if rules %}<table>
-<tr><th>Level</th><th>Rule</th><th>Origin</th><th>ATT&amp;CK</th><th>State</th></tr>
+<tr><th>Level</th><th>Rule</th><th>Origin</th><th>ATT&amp;CK</th><th>State</th><th></th></tr>
 {% for r in rules %}
 <tr><td>{{ badge(r.level) }}</td><td>{{ r.title }}<div class="muted"><code>{{ r.path }}</code></div></td><td>{{ r.licence() }}</td>
 <td>{% for t in r.attack %}<code>{{ t }}</code> {% endfor %}</td>
-<td>{% if r.unsupported %}<span class="error">{{ r.unsupported }}</span>{% else %}{{ badge("ok") }}{% if r.correlation %} correlation{% endif %}{% endif %}</td></tr>
+<td>{% if r.disabled %}{{ badge("disabled") }} <span class="muted">{{ r.disabled }}</span>{% elif r.unsupported %}<span class="error">{{ r.unsupported }}</span>{% else %}{{ badge("ok") }}{% if r.correlation %} correlation{% endif %}{% endif %}</td>
+<td>{% if not r.unsupported %}<form method="post" action="/ui/detection/toggle"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="rule_id" value="{{ r.id }}"><input type="hidden" name="off" value="{{ 0 if r.disabled else 1 }}"><button class="link">{{ "enable" if r.disabled else "disable" }}</button></form>{% endif %}</td></tr>
 {% endfor %}</table>
 {% else %}<p class="muted">Every rule is supported.</p>{% endif %}
 </div>

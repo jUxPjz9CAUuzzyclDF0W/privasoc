@@ -2,6 +2,6 @@
 {% from "_macros.html" import host_link %}
 {% block title %}Job {{ job.id }} · privasoc{% endblock %}
 {% block content %}
-{% if job.kind == "triage" %}<h1>AI triage of <a href="/ui/alert?id={{ job.target }}">alert #{{ job.target }}</a></h1>{% else %}<h1>{% if job.kind == "learn" %}Learning pseudonymisation rules from{% else %}Parser generation for{% endif %} {{ host_link(job.target) }}</h1>{% endif %}
+{% if job.kind == "author" %}<h1>The model is writing a rule</h1>{% elif job.kind == "triage" %}<h1>AI triage of <a href="/ui/alert?id={{ job.target }}">alert #{{ job.target }}</a></h1>{% else %}<h1>{% if job.kind == "learn" %}Learning pseudonymisation rules from{% else %}Parser generation for{% endif %} {{ host_link(job.target) }}</h1>{% endif %}
 {% include "_job.html" %}
 {% endblock %}
