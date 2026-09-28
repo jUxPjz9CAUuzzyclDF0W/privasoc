@@ -53,20 +53,124 @@ skew, each as `ok` / `warning` / `critical` with the reason.
 ## Architecture
 
 ```mermaid
-flowchart LR
-  S[syslog / files<br/>any format] --> V[Vector<br/>approved VRL parsers]
-  V -->|parsed| E[(SQLite<br/>ECS events)]
-  V -->|unknown| Q[(quarantine)]
-  Q --> D[Drain templates<br/>stratified sample]
-  D --> P[pseudonymise<br/>+ leak check]
-  P --> L[local LLM<br/>writes VRL]
-  L --> T[sandbox tests<br/>grounding check]
-  T -->|fail| L
-  T -->|stuck / hallucinating| A[optional API fallback<br/>still pseudonymised]
-  T --> H{human review}
-  H -->|approve| V
-  E --> R[Sigma rules] --> TR[AI triage]
+flowchart TB
+  subgraph INPUTS[Log sources]
+    SYS[UDP / TCP syslog]
+    FILE[File inbox]
+    FUTURE[Future Windows / Proxmox collectors]
+  end
+
+  subgraph LOCAL[Local privacy boundary]
+    VECTOR[Vector collector<br/>approved parsers only]
+    INGEST[Authenticated ingest API<br/>NDJSON + bearer token]
+    GATE{Sender approved?}
+    HELD[(Held lines<br/>pending sender)]
+    HOSTREVIEW{Human host review}
+    KNOWN{Known full format?}
+    BUILTIN[Vector built-in parser<br/>fixed ECS mapping]
+    DROP[Reject sender<br/>delete held lines]
+
+    EVENTS[(SQLite ECS events)]
+    QUAR[(SQLite quarantine<br/>unparsed by source)]
+    VAULT[(Encrypted local vault<br/>HMAC mappings + learned rules)]
+
+    subgraph PARSER[Unknown-format parser generation]
+      DRAIN[Drain templates<br/>stratified sample]
+      PSEUDO[Pseudonymise samples<br/>shape-preserving tokens]
+      LEAK[Leak guard<br/>refuse original values]
+      SPEC[Structured YAML spec<br/>or free-form VRL]
+      COMPILE[Deterministic compiler<br/>repairs reported]
+      SANDBOX[Vector VRL sandbox<br/>compile + runtime]
+      CHECKS[ECS schema + grounding<br/>sample and held-out coverage]
+      PROPOSAL[(Parser proposal<br/>attempts + preview + metrics)]
+      PARSERREVIEW{Human parser review}
+      DEPLOY[Generate Vector config<br/>validate + hot reload]
+      BACKFILL[Backfill quarantined lines]
+    end
+
+    subgraph DETECTION[Detection and analysis]
+      RULES[privasoc + SigmaHQ<br/>approved AI rules]
+      ENGINE[Sigma evaluator<br/>incremental cursor]
+      MATCHES[(Rule matches<br/>correlation groups)]
+      HEALTH[Host health<br/>silence + volume + parse rate + skew]
+      ALERTS[(Alerts<br/>Sigma + health + new sender)]
+      EVIDENCE[Pseudonymised evidence<br/>max 20 matched events]
+      TRIAGE[Validated structured triage<br/>citations + ATT&CK checks]
+      WEBHOOK[Redacted webhook<br/>title + level + count + id only]
+    end
+
+    subgraph AUTHORING[Hunting and rule authoring]
+      REQUEST[Natural-language hunt<br/>event or false-positive request]
+      SIGMA[Validate Sigma YAML<br/>known fields + safe ids]
+      BACKTEST[Backtest with production engine<br/>including correlation thresholds]
+      RULEPROPOSAL[(Rule proposal<br/>matches + TP/FP impact)]
+      RULEREVIEW{Human rule review}
+    end
+
+    ANALYST[Analyst<br/>CLI or authenticated web UI]
+  end
+
+  subgraph MODELS[Model endpoints]
+    LOCALMODEL[Local private model<br/>default]
+    RESIDUAL[Local residual-entity pass<br/>apply rules + final leak guard]
+    REMOTE[Optional remote API<br/>pseudonymised input only]
+  end
+
+  SYS --> VECTOR
+  FILE --> VECTOR
+  FUTURE -. planned .-> VECTOR
+  VECTOR --> INGEST --> GATE
+  GATE -->|no| HELD
+  HELD --> ALERTS
+  HELD --> HOSTREVIEW
+  ANALYST --> HOSTREVIEW
+  HOSTREVIEW -->|reject| DROP
+  HOSTREVIEW -->|approve| KNOWN
+  KNOWN -->|yes| BUILTIN --> DEPLOY
+  KNOWN -->|no| QUAR
+  GATE -->|yes, parsed| EVENTS
+  GATE -->|yes, unknown| QUAR
+  INGEST --> HEALTH
+
+  QUAR --> DRAIN --> PSEUDO
+  VAULT --> PSEUDO
+  PSEUDO --> LEAK --> LOCALMODEL
+  LOCALMODEL --> SPEC --> COMPILE --> SANDBOX --> CHECKS
+  CHECKS -->|fixable error, max N attempts| LOCALMODEL
+  CHECKS -->|valid or acceptable partial coverage| PROPOSAL --> PARSERREVIEW
+  ANALYST --> PARSERREVIEW
+  PARSERREVIEW -->|approve| DEPLOY --> VECTOR
+  PARSERREVIEW -->|reject| QUAR
+  DEPLOY --> BACKFILL --> EVENTS
+  LOCALMODEL -->|cannot parse / stagnates| RESIDUAL --> REMOTE
+  REMOTE --> SPEC
+
+  EVENTS --> ENGINE
+  RULES --> ENGINE --> MATCHES --> ALERTS
+  EVENTS --> HEALTH --> ALERTS
+  ALERTS --> WEBHOOK
+  ALERTS --> EVIDENCE
+  VAULT --> EVIDENCE
+  EVIDENCE --> LOCALMODEL --> TRIAGE
+  EVIDENCE -. remote selected .-> RESIDUAL
+  REMOTE --> TRIAGE
+  TRIAGE --> ANALYST
+  ANALYST -->|acknowledge / close TP or FP| ALERTS
+
+  ANALYST --> REQUEST --> PSEUDO
+  REQUEST -. remote selected .-> RESIDUAL
+  LOCALMODEL --> SIGMA
+  REMOTE --> SIGMA
+  SIGMA --> BACKTEST --> RULEPROPOSAL --> RULEREVIEW
+  ANALYST --> RULEREVIEW
+  RULEREVIEW -->|approve| RULES
+  RULEREVIEW -->|reject| RULEPROPOSAL
 ```
+
+Solid arrows are implemented data or control flows. The dotted collector is planned for
+step 8. Raw or re-identified values stay inside the local boundary; every model-bound path
+passes through pseudonymisation and the leak guard, with an additional local residual pass
+before a remote call.
 
 ## Quick start
 
