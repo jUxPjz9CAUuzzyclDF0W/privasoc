@@ -10,27 +10,33 @@
 </head>
 <body>
 {% block header %}
-<header>
-  <span class="brand">privasoc</span>
-  <nav>
-    <a href="/ui/">Dashboard</a>
-    <a href="/ui/alerts">Alerts</a>
-    <a href="/ui/hunt">Hunt</a>
-    <a href="/ui/hosts">Hosts</a>
-    <a href="/ui/parsers">Parsers</a>
-    <a href="/ui/quarantine">Quarantine</a>
-    <a href="/ui/events">Events</a>
-    <a href="/ui/rules">Pseudonymisation</a>
-    <a href="/ui/detection">Detection</a>
-    <a href="/ui/jobs">Jobs{% if running_job %} <span class="badge running">1 running</span>{% endif %}</a>
-  </nav>
-  <form method="post" action="/ui/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Log out</button></form>
+{% set path = request.url.path %}
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/ui/" aria-label="privasoc dashboard">
+      <span class="brand-mark" aria-hidden="true"><span></span></span>
+      <span class="brand-copy"><strong>privasoc</strong><small>private security operations</small></span>
+    </a>
+    <nav aria-label="Main navigation">
+      <a href="/ui/" {% if path == "/ui/" %}class="active" aria-current="page"{% endif %}>Dashboard</a>
+      <a href="/ui/alerts" {% if path.startswith("/ui/alert") %}class="active" aria-current="page"{% endif %}>Alerts</a>
+      <a href="/ui/hunt" {% if path.startswith("/ui/hunt") or path.startswith("/ui/airule") %}class="active" aria-current="page"{% endif %}>Hunt</a>
+      <a href="/ui/hosts" {% if path.startswith("/ui/host") %}class="active" aria-current="page"{% endif %}>Hosts</a>
+      <a href="/ui/parsers" {% if path.startswith("/ui/parser") %}class="active" aria-current="page"{% endif %}>Parsers</a>
+      <a href="/ui/quarantine" {% if path.startswith("/ui/quarantine") %}class="active" aria-current="page"{% endif %}>Quarantine</a>
+      <a href="/ui/events" {% if path.startswith("/ui/events") %}class="active" aria-current="page"{% endif %}>Events</a>
+      <a href="/ui/rules" {% if path.startswith("/ui/rule") %}class="active" aria-current="page"{% endif %}>Privacy rules</a>
+      <a href="/ui/detection" {% if path.startswith("/ui/detection") %}class="active" aria-current="page"{% endif %}>Detection</a>
+      <a href="/ui/jobs" {% if path.startswith("/ui/job") %}class="active" aria-current="page"{% endif %}>Jobs{% if running_job %}<span class="nav-dot" title="One job running"></span>{% endif %}</a>
+    </nav>
+    <form class="logout" method="post" action="/ui/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Log out</button></form>
+  </div>
 </header>
 {% endblock %}
 <main>
 {% if msg %}<div class="flash {{ level }}">{{ msg }}</div>{% endif %}
 {% block content %}{% endblock %}
-<p class="muted">privasoc {{ version }}</p>
+<footer><span class="footer-mark" aria-hidden="true"></span>privasoc {{ version }} · privacy boundary active</footer>
 </main>
 </body>
 </html>

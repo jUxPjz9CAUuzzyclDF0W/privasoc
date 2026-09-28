@@ -1,19 +1,26 @@
 {% extends "base.html" %}
 {% from "_macros.html" import badge, post, host_link, parser_link with context %}
 {% block content %}
-<h1>Dashboard</h1>
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">Operations overview</p>
+    <h1>Dashboard</h1>
+    <p class="subtitle">Review what needs attention while sensitive data stays inside the privacy boundary.</p>
+  </div>
+  <span class="system-state"><span></span>System active</span>
+</div>
 <div class="cards">
-  <a class="card" href="/ui/alerts"><div class="n {% if alert_counts.critical or alert_counts.high %}critical{% endif %}">{{ alert_counts.open }}</div><div class="l">open alerts ({{ alert_counts.critical }} critical, {{ alert_counts.high }} high)</div></a>
-  <a class="card" href="/ui/hosts"><div class="n">{{ summary.hosts_pending }}</div><div class="l">hosts waiting for approval</div></a>
-  <a class="card" href="/ui/hosts"><div class="n">{{ summary.hosts_approved }}</div><div class="l">approved hosts</div></a>
-  <a class="card" href="/ui/parsers?status=proposed"><div class="n">{{ summary.parsers_proposed }}</div><div class="l">parsers to review</div></a>
-  <a class="card" href="/ui/quarantine"><div class="n">{{ summary.quarantined }}</div><div class="l">lines in quarantine</div></a>
-  <div class="card"><div class="n">{{ summary.held }}</div><div class="l">lines held (host not approved)</div></div>
-  <a class="card" href="/ui/rules?status=proposed"><div class="n">{{ rules_proposed }}</div><div class="l">pseudonymisation rules to review</div></a>
-  <a class="card" href="/ui/events"><div class="n">{{ summary.events }}</div><div class="l">normalised events</div></a>
+  <a class="card card-alert" href="/ui/alerts"><div class="card-top"><span class="card-icon">!</span><span>Alerts</span></div><div class="n {% if alert_counts.critical or alert_counts.high %}critical{% endif %}">{{ alert_counts.open }}</div><div class="l">open alerts · {{ alert_counts.critical }} critical · {{ alert_counts.high }} high</div></a>
+  <a class="card card-review" href="/ui/hosts"><div class="card-top"><span class="card-icon">H</span><span>Review queue</span></div><div class="n">{{ summary.hosts_pending }}</div><div class="l">hosts waiting for approval</div></a>
+  <a class="card card-ok" href="/ui/hosts"><div class="card-top"><span class="card-icon">✓</span><span>Inventory</span></div><div class="n">{{ summary.hosts_approved }}</div><div class="l">Approved hosts</div></a>
+  <a class="card card-review" href="/ui/parsers?status=proposed"><div class="card-top"><span class="card-icon">P</span><span>Review queue</span></div><div class="n">{{ summary.parsers_proposed }}</div><div class="l">Parsers to review</div></a>
+  <a class="card card-neutral" href="/ui/quarantine"><div class="card-top"><span class="card-icon">Q</span><span>Isolation</span></div><div class="n">{{ summary.quarantined }}</div><div class="l">Lines in quarantine</div></a>
+  <div class="card card-neutral"><div class="card-top"><span class="card-icon">⏸</span><span>Admission control</span></div><div class="n">{{ summary.held }}</div><div class="l">Lines held for unapproved hosts</div></div>
+  <a class="card card-review" href="/ui/rules?status=proposed"><div class="card-top"><span class="card-icon">R</span><span>Privacy</span></div><div class="n">{{ rules_proposed }}</div><div class="l">Pseudonymisation rules to review</div></a>
+  <a class="card card-info" href="/ui/events"><div class="card-top"><span class="card-icon">E</span><span>Pipeline</span></div><div class="n">{{ summary.events }}</div><div class="l">Normalised events</div></a>
 </div>
 
-<h2>New senders</h2>
+<div class="section-heading"><div><p class="eyebrow">Admission control</p><h2>New senders</h2></div><a href="/ui/hosts">View all hosts <span aria-hidden="true">→</span></a></div>
 <div class="panel">
 {% if pending %}
 <table>
@@ -26,10 +33,10 @@
 </div></td></tr>
 {% endfor %}
 </table>
-{% else %}<p class="muted">No sender waiting. Point a device at privasoc (syslog on port 5514).</p>{% endif %}
+{% else %}<div class="empty-state"><span class="empty-icon">✓</span><div><strong>No sender waiting</strong><p>Point a device at privasoc using syslog on port 5514.</p></div></div>{% endif %}
 </div>
 
-<h2>Hosts needing attention</h2>
+<div class="section-heading"><div><p class="eyebrow">Health</p><h2>Hosts needing attention</h2></div></div>
 <div class="panel">
 {% if unhealthy %}
 <table>
@@ -38,10 +45,10 @@
 <tr><td>{{ host_link(h.source) }}</td><td>{{ badge(h.health.status) }}</td><td>{{ h.health.reasons|join("; ") }}</td></tr>
 {% endfor %}
 </table>
-{% else %}<p class="muted">Every approved host is healthy.</p>{% endif %}
+{% else %}<div class="empty-state success"><span class="empty-icon">✓</span><div><strong>Every approved host is healthy</strong><p>No action is required right now.</p></div></div>{% endif %}
 </div>
 
-<h2>Parsers to review</h2>
+<div class="section-heading"><div><p class="eyebrow">Data quality</p><h2>Parsers to review</h2></div><a href="/ui/parsers?status=proposed">Open review queue <span aria-hidden="true">→</span></a></div>
 <div class="panel">
 {% if proposed %}
 <table>
@@ -50,6 +57,6 @@
 <tr><td>{{ parser_link(p.id) }}</td><td>{{ host_link(p.source) }}</td><td>{{ p.provider }}:{{ p.model }}</td><td>{{ p.report.reason }}</td></tr>
 {% endfor %}
 </table>
-{% else %}<p class="muted">Nothing to review.</p>{% endif %}
+{% else %}<div class="empty-state"><span class="empty-icon">✓</span><div><strong>Nothing to review</strong><p>New parser proposals will appear here.</p></div></div>{% endif %}
 </div>
 {% endblock %}

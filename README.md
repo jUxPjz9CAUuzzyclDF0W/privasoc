@@ -200,7 +200,9 @@ Every CLI decision is also in the **review UI** at `http://<host>:8000/ui/` (sig
 senders, see host health, start a parser proposal, review it (checks, spec, VRL, attempts,
 preview, and a live run on the latest quarantined lines), then approve or reject it.
 Quarantined lines are shown pseudonymised unless you ask for raw. No asset is loaded from a
-third-party host.
+third-party host. The responsive shell provides active navigation, denser operational cards,
+clear review states, accessible focus styles and matching light/dark themes without changing
+the server-rendered, no-third-party architecture.
 
 ![Dashboard](docs/img/ui-dashboard.png)
 

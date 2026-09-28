@@ -1,13 +1,19 @@
 {% extends "base.html" %}
 {% block header %}{% endblock %}
 {% block content %}
+<div class="login-shell">
 <div class="login panel">
-  <h1>privasoc</h1>
+  <div class="login-brand"><span class="brand-mark" aria-hidden="true"><span></span></span><span><strong>privasoc</strong><small>private security operations</small></span></div>
+  <p class="eyebrow">Secure workspace</p>
+  <h1>Welcome back</h1>
+  <p class="subtitle">Sign in to review alerts, hosts and privacy controls.</p>
   <form method="post" action="/ui/login">
-    <label for="t">Access token <span class="muted">(PRIVASOC_API_TOKEN)</span></label>
+    <label for="t">Access token</label>
     <input id="t" type="password" name="access_token" autocomplete="current-password" autofocus required>
     <input type="hidden" name="next" value="{{ next }}">
-    <button class="primary">Sign in</button>
+    <button class="primary login-button">Sign in securely <span aria-hidden="true">→</span></button>
   </form>
+  <p class="login-note"><span aria-hidden="true">●</span> Your token stays in this browser session.</p>
+</div>
 </div>
 {% endblock %}
